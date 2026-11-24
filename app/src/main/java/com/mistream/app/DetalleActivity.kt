@@ -20,6 +20,8 @@ class DetalleActivity : Activity() {
     private lateinit var prefs: SharedPreferences
     private lateinit var botonContinuar: TextView
     private lateinit var botonFav: TextView
+    private lateinit var tvEps: TextView
+    private lateinit var lista: ListView
     private var titulo = ""
     private var episodiosJson = "[]"
     private var episodios: List<Episodio> = emptyList()
@@ -80,6 +82,7 @@ class DetalleActivity : Activity() {
         tvDesc.setTextColor(Color.parseColor("#B9B5CC"))
         tvDesc.textSize = 14f
         tvDesc.setPadding(0, dp(8), 0, 0)
+        tvDesc.maxLines = 7
         textos.addView(tvDesc)
 
         cabecera.addView(
@@ -126,19 +129,14 @@ class DetalleActivity : Activity() {
         raiz.addView(acciones, lpAcciones)
 
         // Lista de episodios
-        val tvEps = TextView(this)
+        tvEps = TextView(this)
         tvEps.text = "Episodios"
         tvEps.setTextColor(Color.WHITE)
         tvEps.textSize = 18f
         tvEps.setTypeface(null, Typeface.BOLD)
         raiz.addView(tvEps)
 
-        val lista = ListView(this)
-        lista.adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_list_item_1,
-            episodios.map { it.titulo }
-        )
+        lista = ListView(this)
         lista.setOnItemClickListener { _, _, pos, _ -> reproducir(pos) }
         raiz.addView(
             lista,
@@ -148,13 +146,56 @@ class DetalleActivity : Activity() {
         )
 
         setContentView(raiz)
+        mostrarLista()
         actualizarFav()
+
+        if (episodios.isEmpty()) cargarEpisodiosRemotos(portada)
     }
 
     override fun onResume() {
         super.onResume()
         actualizarBoton()
         actualizarFav()
+    }
+
+    private fun mostrarLista() {
+        lista.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_list_item_1,
+            episodios.map { it.titulo }
+        )
+    }
+
+    // Módulos JS: los episodios se piden al abrir el título
+    private fun cargarEpisodiosRemotos(portada: String) {
+        val item = Repositorio.buscarItem(titulo, portada)
+        if (item == null || item.fuente.isEmpty() || item.id.isEmpty()) {
+            tvEps.text = "Sin episodios"
+            actualizarBoton()
+            return
+        }
+        tvEps.text = "Cargando episodios..."
+        Thread {
+            try {
+                val eps = MotorJs.episodios(item.fuente, item.id)
+                runOnUiThread {
+                    episodios = eps
+                    episodiosJson = ModuloParser.episodiosAJson(eps)
+                    mostrarLista()
+                    tvEps.text = if (eps.isEmpty()) "Sin episodios" else "Episodios"
+                    actualizarBoton()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    tvEps.text = "No se pudieron cargar los episodios"
+                    Toast.makeText(
+                        this,
+                        "Error: " + (e.message ?: "desconocido"),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }.start()
     }
 
     private fun actualizarFav() {
