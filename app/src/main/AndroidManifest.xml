@@ -4,7 +4,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:label="MiStream"
+        android:label="KuroAnime"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
@@ -16,6 +16,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".ModulosActivity"
+            android:exported="false" />
 
         <activity
             android:name=".DetalleActivity"
