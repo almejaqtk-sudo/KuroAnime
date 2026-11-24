@@ -233,7 +233,9 @@ object MotorHub {
                 }
             }
 
-            val nombre = v.optString("label", "").ifEmpty { "Servidor ${i + 1}" }
+            val idioma = v.optString("lang", "")
+            val nombre = v.optString("label", "").ifEmpty { "Servidor ${i + 1}" } +
+                (if (idioma.isNotEmpty()) " ($idioma)" else "")
             val enlace = ServerLink(nombre, url, tipo, headers, subs)
             if (tipo == "embed" || tipo == "external") web.add(enlace) else buenos.add(enlace)
         }
