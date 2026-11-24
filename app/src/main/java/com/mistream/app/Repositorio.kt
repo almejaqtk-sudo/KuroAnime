@@ -15,16 +15,23 @@ object Repositorio {
         val nombre: String,
         var categoria: String,
         val tipo: String, // "url" o "codigo"
-        val valor: String, // la URL o el texto JSON del módulo
+        val valor: String, // la URL o el texto del módulo (JSON o JS)
         var activo: Boolean
     )
 
     val CATEGORIAS = listOf("Anime", "Películas", "Series", "Otros")
 
+    // Títulos cargados en memoria, para encontrarlos al abrir el detalle
+    @Volatile
+    private var registro: List<Item> = emptyList()
+
+    fun buscarItem(titulo: String, portada: String): Item? =
+        registro.firstOrNull { it.titulo == titulo && it.portada == portada }
+
     private fun nuevoId(): String = UUID.randomUUID().toString().take(8)
 
     private fun nombreDeUrl(u: String): String {
-        val n = u.substringAfterLast("/").removeSuffix(".json")
+        val n = u.substringAfterLast("/").removeSuffix(".json").removeSuffix(".js")
         return if (n.isEmpty()) u else n
     }
 
@@ -100,11 +107,17 @@ object Repositorio {
             return nombre
         }
 
-        val raiz = JSONObject(t)
-        val nombre = if (raiz.has("modulos")) {
-            raiz.optString("nombre", "Índice de módulos")
+        val nombre = if (t.startsWith("{")) {
+            // Módulo JSON
+            val raiz = JSONObject(t)
+            if (raiz.has("modulos")) {
+                raiz.optString("nombre", "Índice de módulos")
+            } else {
+                ModuloParser.parse(t).nombre
+            }
         } else {
-            ModuloParser.parse(t).nombre
+            // Módulo JavaScript
+            MotorJs.nombreDe(t)
         }
         lista.add(Instalado(nuevoId(), nombre, categoria, "codigo", t, true))
         guardarInstalados(prefs, lista)
@@ -134,6 +147,7 @@ object Repositorio {
         val modulos = mutableListOf<Modulo>()
         val errores = mutableListOf<String>()
         for (f in fuentes) cargarUna(f, true, modulos, errores)
+        registro = modulos.flatMap { it.items }
         return Resultado(modulos, errores)
     }
 
@@ -146,16 +160,20 @@ object Repositorio {
         val esUrl = fuente.trimStart().startsWith("http")
         try {
             val texto = if (esUrl) URL(fuente.trim()).readText() else fuente
-            val raiz = JSONObject(texto)
-            val indice = raiz.optJSONArray("modulos")
-            if (indice != null) {
-                if (permitirIndice) {
-                    for (i in 0 until indice.length()) {
-                        cargarUna(indice.getString(i), false, modulos, errores)
+            if (texto.trimStart().startsWith("{")) {
+                val raiz = JSONObject(texto)
+                val indice = raiz.optJSONArray("modulos")
+                if (indice != null) {
+                    if (permitirIndice) {
+                        for (i in 0 until indice.length()) {
+                            cargarUna(indice.getString(i), false, modulos, errores)
+                        }
                     }
+                } else {
+                    modulos.add(ModuloParser.parse(texto))
                 }
             } else {
-                modulos.add(ModuloParser.parse(texto))
+                modulos.add(MotorJs.cargar(texto))
             }
         } catch (e: Exception) {
             val etiqueta = if (esUrl) fuente.substringAfterLast("/") else "módulo pegado"
