@@ -23,7 +23,12 @@ data class Item(
     val titulo: String,
     val episodios: List<Episodio>,
     val portada: String = "",
-    val descripcion: String = ""
+    val descripcion: String = "",
+    val modulo: String = "",
+    val generos: List<String> = emptyList(),
+    val tipo: String = "",
+    val estado: String = "",
+    val ultimo: String = ""
 )
 
 data class Modulo(val nombre: String, val items: List<Item>)
@@ -88,6 +93,7 @@ object ModuloParser {
 
     fun parse(texto: String): Modulo {
         val raiz = JSONObject(texto)
+        val nombreModulo = raiz.optString("nombre", "Módulo")
         val items = mutableListOf<Item>()
         val arrItems = raiz.getJSONArray("items")
         for (i in 0 until arrItems.length()) {
@@ -97,16 +103,26 @@ object ModuloParser {
             for (j in 0 until arrEps.length()) {
                 eps.add(episodioDeObjeto(arrEps.getJSONObject(j)))
             }
+            val gs = mutableListOf<String>()
+            val ga = oi.optJSONArray("generos")
+            if (ga != null) {
+                for (g in 0 until ga.length()) gs.add(ga.getString(g))
+            }
             items.add(
                 Item(
                     oi.getString("titulo"),
                     eps,
                     oi.optString("portada", ""),
-                    oi.optString("descripcion", "")
+                    oi.optString("descripcion", ""),
+                    nombreModulo,
+                    gs,
+                    oi.optString("tipo", ""),
+                    oi.optString("estado", ""),
+                    oi.optString("ultimo", "")
                 )
             )
         }
-        return Modulo(raiz.optString("nombre", "Módulo"), items)
+        return Modulo(nombreModulo, items)
     }
 
     fun episodiosAJson(lista: List<Episodio>): String {
