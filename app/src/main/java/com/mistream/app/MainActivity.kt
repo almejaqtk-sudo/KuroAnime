@@ -1,118 +1,111 @@
 package com.mistream.app
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
-import android.view.WindowManager
+import android.widget.ArrayAdapter
+import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ListView
 import android.widget.Toast
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MimeTypes
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.ui.PlayerView
+import java.net.URL
 
-// Así describirá cada módulo un servidor de video
-data class ServerLink(
-    val nombre: String,
-    val url: String,
-    val tipo: String = "auto", // auto, mp4, hls, dash
-    val headers: Map<String, String> = emptyMap()
-)
-
-@OptIn(UnstableApi::class)
 class MainActivity : Activity() {
 
-    private var player: ExoPlayer? = null
-    private var indice = 0
-
-    // Enlaces de prueba (videos de muestra libres)
-    private val servidores = listOf(
-        ServerLink(
-            "Servidor roto (prueba de fallback)",
-            "https://example.com/no-existe.mp4"
-        ),
-        ServerLink(
-            "Prueba HLS",
-            "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8",
-            tipo = "hls"
-        ),
-        ServerLink(
-            "Prueba MP4",
-            "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-            tipo = "mp4"
-        )
-    )
+    private lateinit var campoUrl: EditText
+    private lateinit var lista: ListView
+    private var modulo: Modulo? = null
+    private var itemActual: Item? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val prefs = getSharedPreferences("mistream", MODE_PRIVATE)
 
-        val vista = PlayerView(this)
-        setContentView(vista)
+        val raiz = LinearLayout(this)
+        raiz.orientation = LinearLayout.VERTICAL
+        raiz.setPadding(32, 120, 32, 32)
 
-        val exo = ExoPlayer.Builder(this).build()
-        player = exo
-        vista.player = exo
+        campoUrl = EditText(this)
+        campoUrl.hint = "URL del módulo (.json)"
+        campoUrl.setSingleLine()
+        campoUrl.setText(prefs.getString("url", ""))
 
-        exo.addListener(object : Player.Listener {
-            override fun onPlayerError(error: PlaybackException) {
-                Toast.makeText(
-                    this@MainActivity,
-                    "Falló: ${servidores[indice].nombre}",
-                    Toast.LENGTH_SHORT
-                ).show()
-                indice++
-                if (indice < servidores.size) {
-                    reproducir(servidores[indice])
-                } else {
-                    Toast.makeText(
-                        this@MainActivity,
-                        "Ningún servidor funcionó",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-        })
+        val boton = Button(this)
+        boton.text = "Cargar módulo"
 
-        reproducir(servidores[indice])
-    }
+        lista = ListView(this)
 
-    private fun reproducir(servidor: ServerLink) {
-        val exo = player ?: return
+        raiz.addView(campoUrl)
+        raiz.addView(boton)
+        raiz.addView(
+            lista,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+            )
+        )
+        setContentView(raiz)
 
-        val fuenteDatos = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
-            .setDefaultRequestProperties(servidor.headers)
-
-        val mime = when (servidor.tipo) {
-            "hls" -> MimeTypes.APPLICATION_M3U8
-            "dash" -> MimeTypes.APPLICATION_MPD
-            "mp4" -> MimeTypes.VIDEO_MP4
-            else -> null
+        boton.setOnClickListener {
+            val url = campoUrl.text.toString().trim()
+            prefs.edit().putString("url", url).apply()
+            cargar(url)
         }
 
-        val item = MediaItem.Builder()
-            .setUri(servidor.url)
-            .apply { if (mime != null) setMimeType(mime) }
-            .build()
+        lista.setOnItemClickListener { _, _, pos, _ ->
+            val actual = itemActual
+            if (actual == null) {
+                val m = modulo ?: return@setOnItemClickListener
+                mostrarEpisodios(m.items[pos])
+            } else {
+                val ep = actual.episodios[pos]
+                val intent = Intent(this, PlayerActivity::class.java)
+                intent.putExtra("titulo", ep.titulo)
+                intent.putExtra("servidores", ModuloParser.servidoresAJson(ep.servidores))
+                startActivity(intent)
+            }
+        }
 
-        val fuente = DefaultMediaSourceFactory(fuenteDatos).createMediaSource(item)
-        exo.setMediaSource(fuente)
-        exo.prepare()
-        exo.playWhenReady = true
+        val guardada = campoUrl.text.toString().trim()
+        if (guardada.isNotEmpty()) cargar(guardada)
     }
 
-    override fun onStop() {
-        super.onStop()
-        player?.pause()
+    private fun cargar(url: String) {
+        if (url.isEmpty()) {
+            Toast.makeText(this, "Escribe la URL del módulo", Toast.LENGTH_SHORT).show()
+            return
+        }
+        Thread {
+            try {
+                val texto = URL(url).readText()
+                val m = ModuloParser.parse(texto)
+                runOnUiThread {
+                    modulo = m
+                    mostrarItems()
+                    Toast.makeText(this, "Módulo: ${m.nombre}", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        player?.release()
-        player = null
+    private fun mostrarItems() {
+        itemActual = null
+        val titulos = modulo?.items?.map { it.titulo } ?: emptyList()
+        lista.adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, titulos)
+    }
+
+    private fun mostrarEpisodios(item: Item) {
+        itemActual = item
+        val titulos = item.episodios.map { it.titulo }
+        lista.adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, titulos)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (itemActual != null) mostrarItems() else super.onBackPressed()
     }
 }
