@@ -58,10 +58,10 @@ class MainActivity : Activity() {
                 val m = modulo ?: return@setOnItemClickListener
                 mostrarEpisodios(m.items[pos])
             } else {
-                val ep = actual.episodios[pos]
                 val intent = Intent(this, PlayerActivity::class.java)
-                intent.putExtra("titulo", ep.titulo)
-                intent.putExtra("servidores", ModuloParser.servidoresAJson(ep.servidores))
+                intent.putExtra("item", actual.titulo)
+                intent.putExtra("episodios", ModuloParser.episodiosAJson(actual.episodios))
+                intent.putExtra("indice", pos)
                 startActivity(intent)
             }
         }
