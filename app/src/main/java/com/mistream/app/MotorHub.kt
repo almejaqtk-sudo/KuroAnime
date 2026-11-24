@@ -38,6 +38,7 @@ object MotorHub {
     internal val red = Executors.newCachedThreadPool()
     internal val cuerpos = ConcurrentHashMap<Int, String>()
     internal val esperas = ConcurrentHashMap<Int, Espera>()
+    internal val cacheHttp = ConcurrentHashMap<String, EntradaHttp>()
 
     private val contador = AtomicInteger(0)
     private val cargados: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -45,6 +46,15 @@ object MotorHub {
     private val paginaLista = AtomicBoolean(false)
     private val candado = Any()
     private var webView: WebView? = null
+
+    // Arranca el WebView con anticipación (se llama desde un hilo secundario)
+    fun precalentar() {
+        try {
+            preparar()
+        } catch (e: Exception) {
+            // se intentará de nuevo cuando haga falta
+        }
+    }
 
     // Los módulos de KuroAnime definen "var modulo = {...}"; los de AnimeHub terminan con "return {...}"
     fun esFormatoHub(codigo: String): Boolean =
@@ -181,7 +191,20 @@ object MotorHub {
     }
 
     // videos(episodeUrl, ctx): devuelve los servidores reales (primero los reproducibles)
+    private class EntradaVideos(val t: Long, val lista: List<ServerLink>)
+    private val cacheVideos = ConcurrentHashMap<String, EntradaVideos>()
+
+    // Servidores de un episodio. Se guardan 10 minutos para que abrir el reproductor sea instantáneo.
     fun resolverVideos(marcador: ServerLink, prefs: SharedPreferences): List<ServerLink> {
+        val clave = (marcador.headers["mod"] ?: "") + "|" + marcador.url
+        val c = cacheVideos[clave]
+        if (c != null && System.currentTimeMillis() - c.t < 10 * 60 * 1000) return c.lista
+        val lista = resolverVideosRed(marcador, prefs)
+        if (lista.isNotEmpty()) cacheVideos[clave] = EntradaVideos(System.currentTimeMillis(), lista)
+        return lista
+    }
+
+    private fun resolverVideosRed(marcador: ServerLink, prefs: SharedPreferences): List<ServerLink> {
         val clave = marcador.headers["mod"] ?: throw IllegalArgumentException("Marcador inválido")
         val codigo = buscarCodigo(clave, prefs)
             ?: throw IllegalStateException("No encuentro el módulo. Vuelve a instalarlo.")
@@ -243,6 +266,8 @@ object MotorHub {
     }
 }
 
+internal class EntradaHttp(val t: Long, val codigo: Int, val cuerpo: String, val headers: String)
+
 // Puente JS -> Kotlin (debe ser pública para que el WebView pueda usarla)
 internal class PuenteHub {
 
@@ -251,6 +276,19 @@ internal class PuenteHub {
         MotorHub.red.execute {
             try {
                 val o = JSONObject(opts)
+                // Las peticiones GET repetidas se responden desde memoria (5 minutos)
+                val claveCache = if (o.optString("method", "GET") == "GET") {
+                    url + "|" + (o.optJSONObject("headers")?.toString() ?: "")
+                } else null
+                val guardada = if (claveCache != null) MotorHub.cacheHttp[claveCache] else null
+                if (guardada != null && System.currentTimeMillis() - guardada.t < 5 * 60 * 1000) {
+                    MotorHub.cuerpos[id] = guardada.cuerpo
+                    MotorHub.avisar(
+                        "__kuroHttpDone(" + id + "," + guardada.codigo + "," +
+                            JSONObject.quote(guardada.headers) + ")"
+                    )
+                    return@execute
+                }
                 val con = URL(url).openConnection() as HttpURLConnection
                 con.connectTimeout = 20000
                 con.readTimeout = 30000
@@ -273,6 +311,11 @@ internal class PuenteHub {
                     if (k != null && v.isNotEmpty()) hs.put(k, v.last())
                 }
                 con.disconnect()
+                if (claveCache != null && codigo in 200..299 && texto.length < 1500000) {
+                    if (MotorHub.cacheHttp.size > 60) MotorHub.cacheHttp.clear()
+                    MotorHub.cacheHttp[claveCache] =
+                        EntradaHttp(System.currentTimeMillis(), codigo, texto, hs.toString())
+                }
                 MotorHub.cuerpos[id] = texto
                 MotorHub.avisar(
                     "__kuroHttpDone(" + id + "," + codigo + "," + JSONObject.quote(hs.toString()) + ")"

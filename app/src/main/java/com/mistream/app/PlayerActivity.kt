@@ -66,14 +66,36 @@ class PlayerActivity : Activity() {
     private var controlesVisibles = false
     private var menuWebAbierto = false
 
-    // Tamaño del video
+    // Tamaño del video (ExoPlayer)
     private val modosTamano = listOf(
-        AspectRatioFrameLayout.RESIZE_MODE_FIT,   // Ajustar: se ve completo, con barras negras
-        AspectRatioFrameLayout.RESIZE_MODE_ZOOM,  // Rellenar: llena la pantalla recortando los bordes
-        AspectRatioFrameLayout.RESIZE_MODE_FILL   // Alargar: estira el video a toda la pantalla
+        AspectRatioFrameLayout.RESIZE_MODE_FIT,
+        AspectRatioFrameLayout.RESIZE_MODE_ZOOM,
+        AspectRatioFrameLayout.RESIZE_MODE_FILL,
+        AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH,
+        AspectRatioFrameLayout.RESIZE_MODE_FIXED_HEIGHT
     )
-    private val nombresTamano = listOf("Ajustar", "Rellenar", "Alargar")
+    private val nombresTamano = listOf(
+        "Ajustar (se ve completo)",
+        "Rellenar / Zoom (recorta bordes)",
+        "Alargar (estira el video)",
+        "Ajustar al ancho",
+        "Ajustar al alto"
+    )
     private var idxTamano = 0
+
+    // Tamaño en los servidores web
+    private val nombresTamanoWeb = listOf(
+        "Ajustar (se ve completo)",
+        "Rellenar / Zoom (recorta bordes)",
+        "Alargar (estira el video)",
+        "Zoom 125%",
+        "Zoom 150%"
+    )
+    private var idxTamanoWeb = 0
+    private val ocultadorMenu = Runnable {
+        menuWebAbierto = false
+        actualizarBarra()
+    }
 
     // Servidores web (embed) dentro de la misma pantalla
     private var web: WebView? = null
@@ -113,6 +135,7 @@ class PlayerActivity : Activity() {
         }
 
         idxTamano = prefs.getInt("resize_idx", 0).coerceIn(0, modosTamano.size - 1)
+        idxTamanoWeb = prefs.getInt("resize_web", 0).coerceIn(0, nombresTamanoWeb.size - 1)
 
         raiz = FrameLayout(this)
         raiz.setBackgroundColor(Color.BLACK)
@@ -124,6 +147,8 @@ class PlayerActivity : Activity() {
         bMenu = boton("☰") {
             menuWebAbierto = !menuWebAbierto
             actualizarBarra()
+            barra.removeCallbacks(ocultadorMenu)
+            if (menuWebAbierto) barra.postDelayed(ocultadorMenu, 6000)
         }
         val lpMenu = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -148,7 +173,7 @@ class PlayerActivity : Activity() {
         bServidores = boton("Servidores") {
             if (listaServidores.isNotEmpty()) mostrarSelector()
         }
-        bTamano = boton("Tamaño") { cambiarTamano() }
+        bTamano = boton("Tamaño") { mostrarTamanos() }
         for (b in listOf(bAnterior, bEpisodios, bSiguiente, bServidores, bTamano)) {
             val lpb = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -231,16 +256,52 @@ class PlayerActivity : Activity() {
         bAnterior.visibility = if (indiceEp > 0) View.VISIBLE else View.GONE
         bSiguiente.visibility = if (haySiguiente()) View.VISIBLE else View.GONE
         bServidores.visibility = if (listaServidores.size > 1) View.VISIBLE else View.GONE
-        bTamano.visibility = if (modoWeb) View.GONE else View.VISIBLE
-        bTamano.text = "Tamaño: " + nombresTamano[idxTamano]
+        bTamano.visibility = View.VISIBLE
     }
 
-    private fun cambiarTamano() {
-        idxTamano = (idxTamano + 1) % modosTamano.size
-        vistaExo.resizeMode = modosTamano[idxTamano]
-        prefs.edit().putInt("resize_idx", idxTamano).apply()
-        actualizarBarra()
-        Toast.makeText(this, nombresTamano[idxTamano], Toast.LENGTH_SHORT).show()
+    // Escala del iframe para simular ajustar / rellenar / alargar / zoom en los servidores web
+    private fun transformWeb(idx: Int): String {
+        val w = raiz.width.toFloat()
+        val h = raiz.height.toFloat()
+        val f = if (h > 0f) Math.max(1f, (w / h) / (16f / 9f)) else 1.25f
+        return when (idx) {
+            1 -> "scale(" + f + ")"
+            2 -> "scale(" + f + ",1)"
+            3 -> "scale(1.25)"
+            4 -> "scale(1.5)"
+            else -> "none"
+        }
+    }
+
+    private fun mostrarTamanos() {
+        val nombres = if (modoWeb) nombresTamanoWeb else nombresTamano
+        val actual = if (modoWeb) idxTamanoWeb else idxTamano
+        AlertDialog.Builder(this)
+            .setTitle("Tamaño de pantalla")
+            .setSingleChoiceItems(nombres.toTypedArray(), actual) { d, which ->
+                d.dismiss()
+                aplicarTamano(which)
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private fun aplicarTamano(idx: Int) {
+        if (modoWeb) {
+            idxTamanoWeb = idx
+            prefs.edit().putInt("resize_web", idx).apply()
+            web?.evaluateJavascript(
+                "var f=document.getElementById('f');if(f){f.style.transform='" +
+                    transformWeb(idx) + "';}",
+                null
+            )
+            Toast.makeText(this, nombresTamanoWeb[idx], Toast.LENGTH_SHORT).show()
+        } else {
+            idxTamano = idx
+            vistaExo.resizeMode = modosTamano[idx]
+            prefs.edit().putInt("resize_idx", idx).apply()
+            Toast.makeText(this, nombresTamano[idx], Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun mostrarEpisodios() {
@@ -284,10 +345,26 @@ class PlayerActivity : Activity() {
             resolverHub(servidores[0], i)
             return
         }
-        listaServidores = servidores
+        // Módulos con varios servidores: primero el que elegiste
+        val pref = prefs.getString("srv_pref", null)
+        listaServidores = servidores.sortedBy { if (it.nombre == pref) 0 else 1 }
         reproduciendo = true
         actualizarBarra()
-        reproducir(servidores[0])
+        usarServidor(0)
+    }
+
+    // Mientras ves un episodio, deja listos los servidores del siguiente
+    private fun prefetchSiguiente() {
+        val sig = episodios.getOrNull(indiceEp + 1)?.servidores ?: return
+        if (sig.size == 1 && sig[0].tipo == "hub") {
+            Thread {
+                try {
+                    MotorHub.resolverVideos(sig[0], prefs)
+                } catch (e: Exception) {
+                    // se intentará al llegar a ese episodio
+                }
+            }.start()
+        }
     }
 
     // Episodios de módulos AnimeHub: los servidores reales se piden al reproducir
@@ -308,6 +385,7 @@ class PlayerActivity : Activity() {
                     val pref = prefs.getString("srv_pref", null)
                     val idx = lista.indexOfFirst { it.nombre == pref }
                     if (idx >= 0) usarServidor(idx) else mostrarSelector()
+                    prefetchSiguiente()
                 }
             } catch (e: Exception) {
                 runOnUiThread {
@@ -445,7 +523,9 @@ class PlayerActivity : Activity() {
         fallosWeb = 0
         reproduciendo = true
         modoWeb = true
-        menuWebAbierto = false
+        menuWebAbierto = true
+        barra.removeCallbacks(ocultadorMenu)
+        barra.postDelayed(ocultadorMenu, 5000)
         vistaExo.visibility = View.GONE
         asegurarWeb().visibility = View.VISIBLE
         cargarWeb()
@@ -459,9 +539,11 @@ class PlayerActivity : Activity() {
         // Igual que AnimeHub: el reproductor va en un iframe dentro de una página propia
         val html = "<!DOCTYPE html><html><head>" +
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
-            "<style>html,body{margin:0;height:100%;background:#000}" +
-            "iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0}</style>" +
-            "</head><body><iframe src=\"" + seguro + "\" " +
+            "<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}" +
+            "iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0;" +
+            "transform-origin:center center}</style>" +
+            "</head><body><iframe id=\"f\" style=\"transform:" + transformWeb(idxTamanoWeb) + "\" " +
+            "src=\"" + seguro + "\" " +
             "sandbox=\"allow-scripts allow-same-origin allow-forms allow-presentation\" " +
             "allow=\"autoplay; fullscreen; encrypted-media; picture-in-picture\" " +
             "allowfullscreen></iframe></body></html>"

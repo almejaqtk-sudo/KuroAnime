@@ -1,6 +1,7 @@
 package com.mistream.app
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Color
@@ -184,6 +185,7 @@ class DetalleActivity : Activity() {
                     mostrarLista()
                     tvEps.text = if (eps.isEmpty()) "Sin episodios" else "Episodios"
                     actualizarBoton()
+                    prefetch()
                 }
             } catch (e: Exception) {
                 runOnUiThread {
@@ -222,11 +224,86 @@ class DetalleActivity : Activity() {
         }
     }
 
+    // Pide los servidores del episodio que probablemente vas a ver, así al tocarlo ya están listos
+    private fun prefetch() {
+        val s = episodios.getOrNull(indiceContinuar)?.servidores ?: return
+        if (s.size == 1 && s[0].tipo == "hub") {
+            Thread {
+                try {
+                    MotorHub.resolverVideos(s[0], prefs)
+                } catch (e: Exception) {
+                    // se intentará de nuevo al tocar el episodio
+                }
+            }.start()
+        }
+    }
+
     private fun reproducir(indice: Int) {
         if (indice !in episodios.indices) {
             Toast.makeText(this, "Sin episodios", Toast.LENGTH_SHORT).show()
             return
         }
+        val s = episodios[indice].servidores
+        when {
+            s.size == 1 && s[0].tipo == "hub" -> elegirServidorHub(indice, s[0])
+            s.size > 1 -> mostrarSelector(indice, s)
+            else -> abrirReproductor(indice)
+        }
+    }
+
+    // Módulos AnimeHub: busca los servidores y los muestra para elegir
+    private fun elegirServidorHub(indice: Int, marcador: ServerLink) {
+        var cancelado = false
+        val carga = AlertDialog.Builder(this)
+            .setMessage("Buscando servidores...")
+            .setOnCancelListener { cancelado = true }
+            .create()
+        carga.show()
+        Thread {
+            try {
+                val lista = MotorHub.resolverVideos(marcador, prefs)
+                runOnUiThread {
+                    carga.dismiss()
+                    if (cancelado || isFinishing) return@runOnUiThread
+                    if (lista.isEmpty()) {
+                        Toast.makeText(this, "Sin servidores", Toast.LENGTH_LONG).show()
+                    } else {
+                        mostrarSelector(indice, lista)
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    carga.dismiss()
+                    Toast.makeText(
+                        this,
+                        "No se pudieron cargar los servidores: " + (e.message ?: "error"),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun mostrarSelector(indice: Int, lista: List<ServerLink>) {
+        val pref = prefs.getString("srv_pref", null)
+        val etiquetas = lista.map { s ->
+            (if (s.nombre == pref) "★ " else "") + s.nombre + when (s.tipo) {
+                "embed" -> "  · web"
+                "external" -> "  · navegador"
+                else -> ""
+            }
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Elegir servidor")
+            .setItems(etiquetas) { _, which ->
+                prefs.edit().putString("srv_pref", lista[which].nombre).apply()
+                abrirReproductor(indice)
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun abrirReproductor(indice: Int) {
         val intent = Intent(this, PlayerActivity::class.java)
         intent.putExtra("item", titulo)
         intent.putExtra("episodios", episodiosJson)

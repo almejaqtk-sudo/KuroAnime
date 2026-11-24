@@ -144,9 +144,24 @@ object Repositorio {
     }
 
     fun cargarTodo(fuentes: List<String>): Resultado {
+        // Los módulos se cargan a la vez (máximo 4), no uno detrás de otro
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
+        val tareas = fuentes.map { f ->
+            pool.submit(java.util.concurrent.Callable {
+                val m = mutableListOf<Modulo>()
+                val e = mutableListOf<String>()
+                cargarUna(f, true, m, e)
+                Pair(m.toList(), e.toList())
+            })
+        }
         val modulos = mutableListOf<Modulo>()
         val errores = mutableListOf<String>()
-        for (f in fuentes) cargarUna(f, true, modulos, errores)
+        for (t in tareas) {
+            val r = t.get()
+            modulos.addAll(r.first)
+            errores.addAll(r.second)
+        }
+        pool.shutdown()
         registro = modulos.flatMap { it.items }
         return Resultado(modulos, errores)
     }
