@@ -1,0 +1,18 @@
+{
+  "nombre": "Módulo 2",
+  "items": [
+    {
+      "titulo": "Anime de prueba",
+      "portada": "https://picsum.photos/seed/anime/300/450",
+      "descripcion": "Segundo módulo para probar varios módulos y el buscador.",
+      "episodios": [
+        {
+          "titulo": "Episodio 1",
+          "servidores": [
+            { "nombre": "MP4", "url": "https://www.w3schools.com/html/mov_bbb.mp4", "tipo": "mp4" }
+          ]
+        }
+      ]
+    }
+  ]
+}
