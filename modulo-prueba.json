@@ -8,7 +8,8 @@
           "titulo": "Película completa",
           "servidores": [
             { "nombre": "Servidor roto", "url": "https://example.com/no-existe.mp4", "tipo": "mp4" },
-            { "nombre": "Servidor MP4", "url": "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4", "tipo": "mp4" }
+            { "nombre": "Blender MP4", "url": "https://download.blender.org/peach/bigbuckbunny_movies/BigBuckBunny_320x180.mp4", "tipo": "mp4" },
+            { "nombre": "W3Schools MP4", "url": "https://www.w3schools.com/html/mov_bbb.mp4", "tipo": "mp4" }
           ]
         }
       ]
@@ -25,7 +26,8 @@
         {
           "titulo": "Episodio 2",
           "servidores": [
-            { "nombre": "MP4", "url": "https://storage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4", "tipo": "mp4" }
+            { "nombre": "MDN MP4", "url": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4", "tipo": "mp4" },
+            { "nombre": "W3Schools MP4", "url": "https://www.w3schools.com/html/mov_bbb.mp4", "tipo": "mp4" }
           ]
         }
       ]
