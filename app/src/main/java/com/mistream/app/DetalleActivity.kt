@@ -6,9 +6,9 @@ import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
+import android.view.Gravity
 import android.view.View
 import android.widget.ArrayAdapter
-import android.widget.Button
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
@@ -18,13 +18,14 @@ import android.widget.Toast
 class DetalleActivity : Activity() {
 
     private lateinit var prefs: SharedPreferences
-    private lateinit var botonContinuar: Button
+    private lateinit var botonContinuar: TextView
+    private lateinit var botonFav: TextView
     private var titulo = ""
     private var episodiosJson = "[]"
     private var episodios: List<Episodio> = emptyList()
     private var indiceContinuar = 0
 
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+    private fun dp(v: Int) = Ui.dp(this, v)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,20 +34,23 @@ class DetalleActivity : Activity() {
         titulo = intent.getStringExtra("item") ?: ""
         val portada = intent.getStringExtra("portada") ?: ""
         val descripcion = intent.getStringExtra("descripcion") ?: ""
+        val meta = intent.getStringExtra("meta") ?: ""
         episodiosJson = intent.getStringExtra("episodios") ?: "[]"
         episodios = ModuloParser.episodiosDeJson(episodiosJson)
 
         val raiz = LinearLayout(this)
         raiz.orientation = LinearLayout.VERTICAL
-        raiz.setBackgroundColor(Color.parseColor("#121212"))
-        raiz.setPadding(dp(16), dp(48), dp(16), dp(16))
+        raiz.setBackgroundColor(Ui.FONDO)
+        raiz.setPadding(dp(16), dp(40), dp(16), dp(16))
 
+        // Cabecera: portada + textos
         val cabecera = LinearLayout(this)
         cabecera.orientation = LinearLayout.HORIZONTAL
 
         val img = ImageView(this)
         img.scaleType = ImageView.ScaleType.CENTER_CROP
-        img.setBackgroundColor(Color.parseColor("#2A2A2A"))
+        img.background = Ui.fondo(this, Ui.PILDORA, 14)
+        Ui.redondear(img, dp(14).toFloat())
         cabecera.addView(img, LinearLayout.LayoutParams(dp(120), dp(180)))
         ImageLoader.cargar(portada, img)
 
@@ -61,9 +65,19 @@ class DetalleActivity : Activity() {
         tvTitulo.setTypeface(null, Typeface.BOLD)
         textos.addView(tvTitulo)
 
+        if (meta.isNotEmpty()) {
+            val tvMeta = TextView(this)
+            tvMeta.text = meta
+            tvMeta.setTextColor(Ui.ROSA)
+            tvMeta.textSize = 13f
+            tvMeta.setTypeface(null, Typeface.BOLD)
+            tvMeta.setPadding(0, dp(4), 0, 0)
+            textos.addView(tvMeta)
+        }
+
         val tvDesc = TextView(this)
         tvDesc.text = if (descripcion.isEmpty()) "Sin descripción" else descripcion
-        tvDesc.setTextColor(Color.parseColor("#BBBBBB"))
+        tvDesc.setTextColor(Color.parseColor("#B9B5CC"))
         tvDesc.textSize = 14f
         tvDesc.setPadding(0, dp(8), 0, 0)
         textos.addView(tvDesc)
@@ -74,19 +88,48 @@ class DetalleActivity : Activity() {
         )
         raiz.addView(cabecera)
 
-        botonContinuar = Button(this)
-        val lpBoton = LinearLayout.LayoutParams(
+        // Acciones: continuar + Mi lista
+        val acciones = LinearLayout(this)
+        acciones.orientation = LinearLayout.HORIZONTAL
+        acciones.gravity = Gravity.CENTER_VERTICAL
+
+        botonContinuar = TextView(this)
+        botonContinuar.setTextColor(Color.WHITE)
+        botonContinuar.textSize = 15f
+        botonContinuar.setTypeface(null, Typeface.BOLD)
+        botonContinuar.gravity = Gravity.CENTER
+        botonContinuar.maxLines = 1
+        botonContinuar.setPadding(dp(12), dp(12), dp(12), dp(12))
+        botonContinuar.background = Ui.fondo(this, Ui.ROSA, 22)
+        botonContinuar.setOnClickListener { reproducir(indiceContinuar) }
+        val lpContinuar = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        lpContinuar.rightMargin = dp(8)
+        acciones.addView(botonContinuar, lpContinuar)
+
+        botonFav = Ui.pildora(this, "☆ Mi lista")
+        botonFav.setOnClickListener {
+            val ahora = Favoritos.alternar(prefs, titulo)
+            actualizarFav()
+            Toast.makeText(
+                this,
+                if (ahora) "Agregado a Mi lista" else "Quitado de Mi lista",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+        acciones.addView(botonFav)
+
+        val lpAcciones = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         )
-        lpBoton.setMargins(0, dp(16), 0, dp(8))
-        raiz.addView(botonContinuar, lpBoton)
-        botonContinuar.setOnClickListener { reproducir(indiceContinuar) }
+        lpAcciones.setMargins(0, dp(16), 0, dp(12))
+        raiz.addView(acciones, lpAcciones)
 
+        // Lista de episodios
         val tvEps = TextView(this)
         tvEps.text = "Episodios"
         tvEps.setTextColor(Color.WHITE)
-        tvEps.textSize = 16f
+        tvEps.textSize = 18f
         tvEps.setTypeface(null, Typeface.BOLD)
         raiz.addView(tvEps)
 
@@ -105,11 +148,17 @@ class DetalleActivity : Activity() {
         )
 
         setContentView(raiz)
+        actualizarFav()
     }
 
     override fun onResume() {
         super.onResume()
         actualizarBoton()
+        actualizarFav()
+    }
+
+    private fun actualizarFav() {
+        botonFav.text = if (Favoritos.esFavorito(prefs, titulo)) "★ En Mi lista" else "☆ Mi lista"
     }
 
     private fun actualizarBoton() {
