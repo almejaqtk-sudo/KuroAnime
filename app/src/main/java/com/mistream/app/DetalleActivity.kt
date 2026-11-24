@@ -177,7 +177,7 @@ class DetalleActivity : Activity() {
         tvEps.text = "Cargando episodios..."
         Thread {
             try {
-                val eps = MotorJs.episodios(item.fuente, item.id)
+                val eps = Motores.episodios(item.fuente, item.id)
                 runOnUiThread {
                     episodios = eps
                     episodiosJson = ModuloParser.episodiosAJson(eps)

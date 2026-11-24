@@ -215,26 +215,35 @@ Reglas: el "tipo" del servidor puede ser mp4, hls o dash. Puedes añadir "header
     }
 
     private fun instalar(texto: String) {
-        try {
-            val nombre = Repositorio.instalarTexto(
-                prefs, texto, Repositorio.CATEGORIAS[categoriaSel]
-            )
-            campo.setText("")
-            refrescar()
-            Toast.makeText(this, "Instalado: $nombre", Toast.LENGTH_SHORT).show()
-        } catch (e: JSONException) {
-            Toast.makeText(
-                this,
-                "No es un módulo válido. Revisa que sea JSON con \"nombre\" e \"items\".",
-                Toast.LENGTH_LONG
-            ).show()
-        } catch (e: Exception) {
-            Toast.makeText(
-                this,
-                "No se pudo instalar: " + (e.message ?: "error"),
-                Toast.LENGTH_LONG
-            ).show()
-        }
+        val categoria = Repositorio.CATEGORIAS[categoriaSel]
+        Toast.makeText(this, "Instalando...", Toast.LENGTH_SHORT).show()
+        // En hilo aparte: los módulos de AnimeHub se validan en un WebView
+        Thread {
+            try {
+                val nombre = Repositorio.instalarTexto(prefs, texto, categoria)
+                runOnUiThread {
+                    campo.setText("")
+                    refrescar()
+                    Toast.makeText(this, "Instalado: $nombre", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: JSONException) {
+                runOnUiThread {
+                    Toast.makeText(
+                        this,
+                        "No es un módulo válido. Revisa que sea JSON con \"nombre\" e \"items\", o un archivo JS.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(
+                        this,
+                        "No se pudo instalar: " + (e.message ?: "error"),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }.start()
     }
 
     @Deprecated("Deprecated in Java")

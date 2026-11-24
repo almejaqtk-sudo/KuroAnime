@@ -117,7 +117,7 @@ object Repositorio {
             }
         } else {
             // Módulo JavaScript
-            MotorJs.nombreDe(t)
+            Motores.nombreDe(t)
         }
         lista.add(Instalado(nuevoId(), nombre, categoria, "codigo", t, true))
         guardarInstalados(prefs, lista)
@@ -173,7 +173,7 @@ object Repositorio {
                     modulos.add(ModuloParser.parse(texto))
                 }
             } else {
-                modulos.add(MotorJs.cargar(texto))
+                modulos.add(Motores.cargar(texto))
             }
         } catch (e: Exception) {
             val etiqueta = if (esUrl) fuente.substringAfterLast("/") else "módulo pegado"
