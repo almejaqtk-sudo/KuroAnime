@@ -4,6 +4,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
+        android:name=".KuroApp"
         android:icon="@drawable/ic_kuro"
         android:label="KuroAnime"
         android:usesCleartextTraffic="true"
