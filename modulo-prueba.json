@@ -3,6 +3,8 @@
   "items": [
     {
       "titulo": "Big Buck Bunny",
+      "portada": "https://picsum.photos/seed/bunny/300/450",
+      "descripcion": "Película de animación de prueba. El primer servidor está roto a propósito para probar el fallback.",
       "episodios": [
         {
           "titulo": "Película completa",
@@ -16,6 +18,8 @@
     },
     {
       "titulo": "Serie de prueba",
+      "portada": "https://picsum.photos/seed/serie/300/450",
+      "descripcion": "Serie con tres episodios para probar el botón Siguiente y la función de continuar viendo.",
       "episodios": [
         {
           "titulo": "Episodio 1",
@@ -28,6 +32,38 @@
           "servidores": [
             { "nombre": "MDN MP4", "url": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4", "tipo": "mp4" },
             { "nombre": "W3Schools MP4", "url": "https://www.w3schools.com/html/mov_bbb.mp4", "tipo": "mp4" }
+          ]
+        },
+        {
+          "titulo": "Episodio 3",
+          "servidores": [
+            { "nombre": "W3Schools MP4", "url": "https://www.w3schools.com/html/mov_bbb.mp4", "tipo": "mp4" }
+          ]
+        }
+      ]
+    },
+    {
+      "titulo": "Flor",
+      "portada": "https://picsum.photos/seed/flor/300/450",
+      "descripcion": "Video corto de una flor.",
+      "episodios": [
+        {
+          "titulo": "Video corto",
+          "servidores": [
+            { "nombre": "MDN MP4", "url": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4", "tipo": "mp4" }
+          ]
+        }
+      ]
+    },
+    {
+      "titulo": "Demo HLS",
+      "portada": "https://picsum.photos/seed/hls/300/450",
+      "descripcion": "Transmisión HLS de demostración con varias calidades.",
+      "episodios": [
+        {
+          "titulo": "Demo",
+          "servidores": [
+            { "nombre": "HLS", "url": "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8", "tipo": "hls" }
           ]
         }
       ]
