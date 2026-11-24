@@ -71,7 +71,6 @@ class EmbedActivity : Activity() {
         s.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         s.javaScriptCanOpenWindowsAutomatically = false
         s.setSupportMultipleWindows(false)
-        s.userAgentString = MotorHub.USER_AGENT
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true)
 
         web.webViewClient = object : WebViewClient() {
@@ -86,7 +85,7 @@ class EmbedActivity : Activity() {
                 request: WebResourceRequest,
                 errorResponse: WebResourceResponse
             ) {
-                if (request.isForMainFrame && errorResponse.statusCode >= 400) falloServidor()
+                if (request.url.toString() == urls[indice] && errorResponse.statusCode >= 400) falloServidor()
             }
 
             override fun onReceivedError(
@@ -94,7 +93,7 @@ class EmbedActivity : Activity() {
                 request: WebResourceRequest,
                 error: WebResourceError
             ) {
-                if (request.isForMainFrame) falloServidor()
+                if (request.isForMainFrame || request.url.toString() == urls[indice]) falloServidor()
             }
         }
         web.webChromeClient = object : WebChromeClient() {
@@ -167,10 +166,18 @@ class EmbedActivity : Activity() {
         val nombre = nombres.getOrElse(indice) { "Servidor " + (indice + 1) }
         Toast.makeText(this, "Servidor: $nombre", Toast.LENGTH_SHORT).show()
         val url = urls[indice]
-        hostInicial = Uri.parse(url).host ?: ""
-        val cabeceras = HashMap<String, String>()
-        if (referer.isNotEmpty()) cabeceras["Referer"] = referer
-        web.loadUrl(url, cabeceras)
+        hostInicial = "localhost"
+        val seguro = url.replace("&", "&amp;").replace("\"", "&quot;")
+        // Igual que AnimeHub: el reproductor va en un iframe dentro de una página propia
+        val html = "<!DOCTYPE html><html><head>" +
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
+            "<style>html,body{margin:0;height:100%;background:#000}" +
+            "iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0}</style>" +
+            "</head><body><iframe src=\"" + seguro + "\" " +
+            "sandbox=\"allow-scripts allow-same-origin allow-forms allow-presentation\" " +
+            "allow=\"autoplay; fullscreen; encrypted-media; picture-in-picture\" " +
+            "allowfullscreen></iframe></body></html>"
+        web.loadDataWithBaseURL("https://localhost/", html, "text/html", "utf-8", null)
     }
 
     private fun salirPantallaCompleta() {

@@ -1,6 +1,7 @@
 package com.mistream.app
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ActivityInfo
@@ -34,6 +35,9 @@ class PlayerActivity : Activity() {
     private var indiceServ = 0
     private var posInicial = 0L
     private lateinit var botonSiguiente: Button
+    private lateinit var botonServidores: Button
+    private var listaServidores: List<ServerLink> = emptyList()
+    private var reproduciendo = false
     private lateinit var prefs: SharedPreferences
 
     @Suppress("DEPRECATION")
@@ -78,12 +82,29 @@ class PlayerActivity : Activity() {
         lp.gravity = Gravity.TOP or Gravity.END
         lp.setMargins(0, 48, 48, 0)
         raiz.addView(botonSiguiente, lp)
+
+        botonServidores = Button(this)
+        botonServidores.text = "Servidores"
+        botonServidores.visibility = View.GONE
+        val lp2 = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        )
+        lp2.gravity = Gravity.TOP or Gravity.START
+        lp2.setMargins(48, 48, 0, 0)
+        raiz.addView(botonServidores, lp2)
+        botonServidores.setOnClickListener {
+            if (listaServidores.isNotEmpty()) mostrarSelector()
+        }
         setContentView(raiz)
 
         vista.setControllerVisibilityListener(
             PlayerView.ControllerVisibilityListener { visibilidad ->
                 botonSiguiente.visibility =
                     if (visibilidad == View.VISIBLE && haySiguiente()) View.VISIBLE
+                    else View.GONE
+                botonServidores.visibility =
+                    if (visibilidad == View.VISIBLE && listaServidores.isNotEmpty()) View.VISIBLE
                     else View.GONE
             }
         )
@@ -135,6 +156,8 @@ class PlayerActivity : Activity() {
         indiceEp = i
         servidores = episodios[i].servidores
         indiceServ = 0
+        listaServidores = emptyList()
+        reproduciendo = false
         posInicial = prefs.getLong(clave(), 0L)
         botonSiguiente.visibility = View.GONE
         Toast.makeText(this, episodios[i].titulo, Toast.LENGTH_SHORT).show()
@@ -157,21 +180,15 @@ class PlayerActivity : Activity() {
                 val lista = MotorHub.resolverVideos(marcador, prefs)
                 runOnUiThread {
                     if (isFinishing || indiceEp != i) return@runOnUiThread
-                    val propios = lista.filter { it.tipo != "embed" && it.tipo != "external" }
-                    if (propios.isNotEmpty()) {
-                        servidores = propios
-                        indiceServ = 0
-                        reproducir(propios[0])
-                    } else if (lista.isNotEmpty()) {
-                        Toast.makeText(
-                            this,
-                            "Este episodio solo tiene reproductor web; se abre en el navegador",
-                            Toast.LENGTH_LONG
-                        ).show()
-                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(lista[0].url)))
-                    } else {
+                    listaServidores = lista
+                    if (lista.isEmpty()) {
                         Toast.makeText(this, "Sin servidores", Toast.LENGTH_LONG).show()
+                        return@runOnUiThread
                     }
+                    // Si ya elegiste un servidor antes y este episodio lo tiene, se usa solo
+                    val pref = prefs.getString("srv_pref", null)
+                    val idx = lista.indexOfFirst { it.nombre == pref }
+                    if (idx >= 0) usarServidor(idx) else mostrarSelector()
                 }
             } catch (e: Exception) {
                 runOnUiThread {
@@ -183,6 +200,58 @@ class PlayerActivity : Activity() {
                 }
             }
         }.start()
+    }
+
+    private fun mostrarSelector() {
+        val etiquetas = listaServidores.map { s ->
+            s.nombre + when (s.tipo) {
+                "embed" -> "  · web"
+                "external" -> "  · navegador"
+                else -> ""
+            }
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Elegir servidor")
+            .setItems(etiquetas) { _, which ->
+                prefs.edit().putString("srv_pref", listaServidores[which].nombre).apply()
+                usarServidor(which)
+            }
+            .setNegativeButton("Cancelar", null)
+            .setOnCancelListener { if (!reproduciendo) finish() }
+            .show()
+    }
+
+    private fun usarServidor(idx: Int) {
+        if (idx !in listaServidores.indices) return
+        val elegido = listaServidores[idx]
+        when (elegido.tipo) {
+            "embed" -> {
+                val webs = listaServidores.filter { it.tipo == "embed" }
+                abrirEmbeds(webs.filter { it === elegido } + webs.filter { it !== elegido })
+            }
+            "external" -> {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(elegido.url)))
+            }
+            else -> {
+                val propios = listaServidores.filter { it.tipo != "embed" && it.tipo != "external" }
+                servidores = propios.filter { it === elegido } + propios.filter { it !== elegido }
+                indiceServ = 0
+                reproduciendo = true
+                reproducir(servidores[0])
+            }
+        }
+    }
+
+    // Servidores web (embed): se muestran dentro de la app, en un WebView propio
+    private fun abrirEmbeds(lista: List<ServerLink>) {
+        if (lista.isEmpty()) return
+        player?.pause()
+        guardarPosicion()
+        val i = Intent(this, EmbedActivity::class.java)
+        i.putExtra("urls", lista.map { it.url }.toTypedArray())
+        i.putExtra("nombres", lista.map { it.nombre }.toTypedArray())
+        startActivity(i)
+        finish()
     }
 
     private fun guardarPosicion() {
