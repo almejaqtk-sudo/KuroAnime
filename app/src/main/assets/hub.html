@@ -1,1 +1,104 @@
-hila
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head><body>
+<script>
+(function () {
+  var pend = {}, seq = 0, mods = {}, detCache = {};
+
+  // ---- fetch nativo: las peticiones las hace Kotlin (sin CORS) ----
+  function nativeFetch(url, opt) {
+    return new Promise(function (res, rej) {
+      var id = ++seq;
+      pend[id] = { res: res, rej: rej };
+      var o = opt || {}, h = {}, src = o.headers;
+      if (src) {
+        if (Array.isArray(src)) src.forEach(function (p) { h[p[0]] = p[1]; });
+        else if (typeof src.forEach === 'function') src.forEach(function (v, k) { h[k] = v; });
+        else h = src;
+      }
+      KuroBridge.http(id, String(url), JSON.stringify({
+        method: String(o.method || 'GET').toUpperCase(),
+        headers: h,
+        body: o.body == null ? null : String(o.body)
+      }));
+    });
+  }
+
+  window.__kuroHttpDone = function (id, status, extra) {
+    var p = pend[id];
+    if (!p) return;
+    delete pend[id];
+    if (status <= 0) { p.rej(new TypeError(extra || 'Network error')); return; }
+    var body = KuroBridge.tomar(id);
+    var hs = {};
+    try { hs = JSON.parse(extra); } catch (e) {}
+    p.res({ status: status, body: body, headers: hs });
+  };
+
+  window.fetch = function (url, opt) {
+    var u = (url && typeof url === 'object' && url.url) ? url.url : String(url);
+    return nativeFetch(u, opt).then(function (r) {
+      var hd = new Headers();
+      Object.keys(r.headers).forEach(function (k) {
+        try { hd.append(k, r.headers[k]); } catch (e) {}
+      });
+      var nobody = r.status === 204 || r.status === 205 || r.status === 304;
+      var st = (r.status >= 200 && r.status <= 599) ? r.status : 502;
+      return new Response(nobody ? null : r.body, { status: st, headers: hd });
+    });
+  };
+
+  // ---- la misma API que reciben los módulos en AnimeHub ----
+  var httpErr = function (r) { var e = new Error('HTTP ' + r.status); e.status = r.status; return e; };
+  var api = {
+    text: async function (url, opt) { var r = await fetch(url, opt); if (!r.ok) throw httpErr(r); return r.text(); },
+    json: async function (url, opt) { var r = await fetch(url, opt); if (!r.ok) throw httpErr(r); return r.json(); },
+    html: async function (url, opt) { return new DOMParser().parseFromString(await api.text(url, opt), 'text/html'); },
+    abs: function (rel, base) { try { return new URL(rel, base).href; } catch (e) { return rel; } }
+  };
+
+  function compile(code) {
+    var module = { exports: {} };
+    var r = new Function('api', 'module', 'exports', code)(api, module, module.exports);
+    var m = r || module.exports;
+    if (!m || !m.id || !m.name) throw new Error('El módulo necesita "id" y "name".');
+    if (typeof m.home !== 'function' && typeof m.search !== 'function') throw new Error('Falta home() o search().');
+    if (typeof m.details !== 'function' || typeof m.videos !== 'function') throw new Error('Faltan details() y videos().');
+    return m;
+  }
+
+  window.__kuroCall = function (id, clave, code, metodo, argsJson) {
+    (async function () {
+      try {
+        if (code) mods[clave] = compile(code);
+        var m = mods[clave];
+        if (!m) throw new Error('Módulo no cargado');
+        var out;
+        if (metodo === '__info') {
+          out = {
+            name: String(m.name),
+            tieneHome: typeof m.home === 'function',
+            tieneSearch: typeof m.search === 'function'
+          };
+        } else {
+          if (typeof m[metodo] !== 'function') throw new Error('El módulo no define ' + metodo + '()');
+          var a = JSON.parse(argsJson || '[]');
+          if (metodo === 'videos') {
+            var epUrl = a[0], ep = a[1] || {}, detUrl = a[2];
+            var dk = clave + '|' + detUrl;
+            var det = detCache[dk];
+            if (!det && detUrl) { det = await m.details(detUrl); detCache[dk] = det; }
+            out = await m.videos(epUrl, { detail: det, episode: ep });
+          } else {
+            out = await m[metodo].apply(m, a);
+            if (metodo === 'details') detCache[clave + '|' + a[0]] = out;
+          }
+        }
+        KuroBridge.resultado(id, true, JSON.stringify(out === undefined ? null : out));
+      } catch (e) {
+        KuroBridge.resultado(id, false, String((e && e.message) || e));
+      }
+    })();
+  };
+})();
+</script>
+</body></html>
