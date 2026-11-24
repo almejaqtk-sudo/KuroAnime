@@ -1,17 +1,29 @@
 package com.mistream.app
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ActivityInfo
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
+import android.webkit.CookieManager
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -22,23 +34,55 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 
 @OptIn(UnstableApi::class)
 class PlayerActivity : Activity() {
 
     private var player: ExoPlayer? = null
+    private lateinit var vistaExo: PlayerView
+    private lateinit var raiz: FrameLayout
+    private lateinit var prefs: SharedPreferences
+
     private var episodios: List<Episodio> = emptyList()
     private var itemTitulo = ""
     private var indiceEp = 0
     private var servidores: List<ServerLink> = emptyList()
     private var indiceServ = 0
     private var posInicial = 0L
-    private lateinit var botonSiguiente: Button
-    private lateinit var botonServidores: Button
+
+    // Servidores del episodio actual (para el selector)
     private var listaServidores: List<ServerLink> = emptyList()
     private var reproduciendo = false
-    private lateinit var prefs: SharedPreferences
+
+    // Barra de controles propia
+    private lateinit var barra: LinearLayout
+    private lateinit var bMenu: Button
+    private lateinit var bAnterior: Button
+    private lateinit var bSiguiente: Button
+    private lateinit var bServidores: Button
+    private lateinit var bTamano: Button
+    private var controlesVisibles = false
+    private var menuWebAbierto = false
+
+    // Tamaño del video
+    private val modosTamano = listOf(
+        AspectRatioFrameLayout.RESIZE_MODE_FIT,   // Ajustar: se ve completo, con barras negras
+        AspectRatioFrameLayout.RESIZE_MODE_ZOOM,  // Rellenar: llena la pantalla recortando los bordes
+        AspectRatioFrameLayout.RESIZE_MODE_FILL   // Alargar: estira el video a toda la pantalla
+    )
+    private val nombresTamano = listOf("Ajustar", "Rellenar", "Alargar")
+    private var idxTamano = 0
+
+    // Servidores web (embed) dentro de la misma pantalla
+    private var web: WebView? = null
+    private var modoWeb = false
+    private var urlsWeb: List<ServerLink> = emptyList()
+    private var indiceWeb = 0
+    private var fallosWeb = 0
+    private var vistaCompleta: View? = null
+    private var callbackCompleta: WebChromeClient.CustomViewCallback? = null
 
     @Suppress("DEPRECATION")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -68,61 +112,78 @@ class PlayerActivity : Activity() {
             return
         }
 
-        val raiz = FrameLayout(this)
-        val vista = PlayerView(this)
-        raiz.addView(vista)
+        idxTamano = prefs.getInt("resize_idx", 0).coerceIn(0, modosTamano.size - 1)
 
-        botonSiguiente = Button(this)
-        botonSiguiente.text = "Siguiente ▶"
-        botonSiguiente.visibility = View.GONE
-        val lp = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT
-        )
-        lp.gravity = Gravity.TOP or Gravity.END
-        lp.setMargins(0, 48, 48, 0)
-        raiz.addView(botonSiguiente, lp)
+        raiz = FrameLayout(this)
+        raiz.setBackgroundColor(Color.BLACK)
+        vistaExo = PlayerView(this)
+        vistaExo.resizeMode = modosTamano[idxTamano]
+        raiz.addView(vistaExo)
 
-        botonServidores = Button(this)
-        botonServidores.text = "Servidores"
-        botonServidores.visibility = View.GONE
-        val lp2 = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT
-        )
-        lp2.gravity = Gravity.TOP or Gravity.START
-        lp2.setMargins(48, 48, 0, 0)
-        raiz.addView(botonServidores, lp2)
-        botonServidores.setOnClickListener {
-            if (listaServidores.isNotEmpty()) mostrarSelector()
+        // Botón ☰ (solo en modo web, para mostrar/ocultar la barra)
+        bMenu = boton("☰") {
+            menuWebAbierto = !menuWebAbierto
+            actualizarBarra()
         }
-        setContentView(raiz)
-
-        vista.setControllerVisibilityListener(
-            PlayerView.ControllerVisibilityListener { visibilidad ->
-                botonSiguiente.visibility =
-                    if (visibilidad == View.VISIBLE && haySiguiente()) View.VISIBLE
-                    else View.GONE
-                botonServidores.visibility =
-                    if (visibilidad == View.VISIBLE && listaServidores.isNotEmpty()) View.VISIBLE
-                    else View.GONE
-            }
+        val lpMenu = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
         )
+        lpMenu.gravity = Gravity.TOP or Gravity.START
+        lpMenu.setMargins(24, 24, 0, 0)
+        raiz.addView(bMenu, lpMenu)
 
-        botonSiguiente.setOnClickListener {
+        // Barra: anterior · episodios · siguiente · servidores · tamaño
+        barra = LinearLayout(this)
+        barra.orientation = LinearLayout.HORIZONTAL
+        bAnterior = boton("◀ Anterior") {
+            guardarPosicion()
+            cargarEpisodio(indiceEp - 1)
+        }
+        val bEpisodios = boton("Episodios") { mostrarEpisodios() }
+        bSiguiente = boton("Siguiente ▶") {
             guardarPosicion()
             cargarEpisodio(indiceEp + 1)
         }
+        bServidores = boton("Servidores") {
+            if (listaServidores.isNotEmpty()) mostrarSelector()
+        }
+        bTamano = boton("Tamaño") { cambiarTamano() }
+        for (b in listOf(bAnterior, bEpisodios, bSiguiente, bServidores, bTamano)) {
+            val lpb = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            lpb.setMargins(8, 0, 8, 0)
+            barra.addView(b, lpb)
+        }
+        val lpBarra = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        )
+        lpBarra.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        lpBarra.setMargins(0, 24, 0, 0)
+        raiz.addView(barra, lpBarra)
+        setContentView(raiz)
+
+        vistaExo.setControllerVisibilityListener(
+            PlayerView.ControllerVisibilityListener { visibilidad ->
+                controlesVisibles = visibilidad == View.VISIBLE
+                actualizarBarra()
+            }
+        )
+        actualizarBarra()
 
         val exo = ExoPlayer.Builder(this).build()
         player = exo
-        vista.player = exo
+        vistaExo.player = exo
 
         exo.addListener(object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
+                val nombre = servidores.getOrNull(indiceServ)?.nombre ?: ""
                 Toast.makeText(
                     this@PlayerActivity,
-                    "Falló ${servidores[indiceServ].nombre}: ${motivo(error)}",
+                    "Falló $nombre: ${motivo(error)}",
                     Toast.LENGTH_LONG
                 ).show()
                 indiceServ++
@@ -131,7 +192,7 @@ class PlayerActivity : Activity() {
                 } else {
                     Toast.makeText(
                         this@PlayerActivity,
-                        "Ningún servidor funcionó",
+                        "Ningún servidor funcionó. Prueba con el botón Servidores.",
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -148,27 +209,84 @@ class PlayerActivity : Activity() {
         cargarEpisodio(indiceEp)
     }
 
+    private fun boton(texto: String, accion: () -> Unit): Button {
+        val b = Button(this)
+        b.text = texto
+        b.isAllCaps = false
+        b.textSize = 12f
+        b.alpha = 0.9f
+        b.setOnClickListener { accion() }
+        return b
+    }
+
     private fun haySiguiente() = indiceEp < episodios.size - 1
 
     private fun clave() = "pos_" + itemTitulo + "_" + episodios[indiceEp].titulo
 
+    private fun actualizarBarra() {
+        if (!::barra.isInitialized) return
+        val mostrar = if (modoWeb) menuWebAbierto else controlesVisibles
+        barra.visibility = if (mostrar) View.VISIBLE else View.GONE
+        bMenu.visibility = if (modoWeb) View.VISIBLE else View.GONE
+        bAnterior.visibility = if (indiceEp > 0) View.VISIBLE else View.GONE
+        bSiguiente.visibility = if (haySiguiente()) View.VISIBLE else View.GONE
+        bServidores.visibility = if (listaServidores.size > 1) View.VISIBLE else View.GONE
+        bTamano.visibility = if (modoWeb) View.GONE else View.VISIBLE
+        bTamano.text = "Tamaño: " + nombresTamano[idxTamano]
+    }
+
+    private fun cambiarTamano() {
+        idxTamano = (idxTamano + 1) % modosTamano.size
+        vistaExo.resizeMode = modosTamano[idxTamano]
+        prefs.edit().putInt("resize_idx", idxTamano).apply()
+        actualizarBarra()
+        Toast.makeText(this, nombresTamano[idxTamano], Toast.LENGTH_SHORT).show()
+    }
+
+    private fun mostrarEpisodios() {
+        val titulos = episodios.map { it.titulo }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Episodios")
+            .setSingleChoiceItems(titulos, indiceEp) { d, which ->
+                d.dismiss()
+                if (which != indiceEp) {
+                    guardarPosicion()
+                    cargarEpisodio(which)
+                }
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private fun detenerTodo() {
+        player?.stop()
+        player?.clearMediaItems()
+        ocultarWeb()
+    }
+
     private fun cargarEpisodio(i: Int) {
+        if (i !in episodios.indices) return
         indiceEp = i
+        detenerTodo()
         servidores = episodios[i].servidores
         indiceServ = 0
         listaServidores = emptyList()
         reproduciendo = false
         posInicial = prefs.getLong(clave(), 0L)
-        botonSiguiente.visibility = View.GONE
         Toast.makeText(this, episodios[i].titulo, Toast.LENGTH_SHORT).show()
         if (servidores.isEmpty()) {
             Toast.makeText(this, "Sin servidores", Toast.LENGTH_LONG).show()
+            actualizarBarra()
             return
         }
         if (servidores.size == 1 && servidores[0].tipo == "hub") {
+            actualizarBarra()
             resolverHub(servidores[0], i)
             return
         }
+        listaServidores = servidores
+        reproduciendo = true
+        actualizarBarra()
         reproducir(servidores[0])
     }
 
@@ -181,6 +299,7 @@ class PlayerActivity : Activity() {
                 runOnUiThread {
                     if (isFinishing || indiceEp != i) return@runOnUiThread
                     listaServidores = lista
+                    actualizarBarra()
                     if (lista.isEmpty()) {
                         Toast.makeText(this, "Sin servidores", Toast.LENGTH_LONG).show()
                         return@runOnUiThread
@@ -227,7 +346,7 @@ class PlayerActivity : Activity() {
         when (elegido.tipo) {
             "embed" -> {
                 val webs = listaServidores.filter { it.tipo == "embed" }
-                abrirEmbeds(webs.filter { it === elegido } + webs.filter { it !== elegido })
+                mostrarWeb(webs.filter { it === elegido } + webs.filter { it !== elegido })
             }
             "external" -> {
                 startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(elegido.url)))
@@ -242,17 +361,160 @@ class PlayerActivity : Activity() {
         }
     }
 
-    // Servidores web (embed): se muestran dentro de la app, en un WebView propio
-    private fun abrirEmbeds(lista: List<ServerLink>) {
+    // ---------- Servidores web (embed) dentro de esta pantalla ----------
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun asegurarWeb(): WebView {
+        web?.let { return it }
+        val w = WebView(this)
+        w.setBackgroundColor(Color.BLACK)
+        val s = w.settings
+        s.javaScriptEnabled = true
+        s.domStorageEnabled = true
+        s.mediaPlaybackRequiresUserGesture = false
+        s.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        s.javaScriptCanOpenWindowsAutomatically = false
+        s.setSupportMultipleWindows(false)
+        CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
+
+        w.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                val host = request.url.host ?: return true
+                return request.isForMainFrame && host != "localhost"
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView,
+                request: WebResourceRequest,
+                errorResponse: WebResourceResponse
+            ) {
+                if (request.url.toString() == urlsWeb.getOrNull(indiceWeb)?.url &&
+                    errorResponse.statusCode >= 400
+                ) falloWeb()
+            }
+
+            override fun onReceivedError(
+                view: WebView,
+                request: WebResourceRequest,
+                error: WebResourceError
+            ) {
+                if (request.url.toString() == urlsWeb.getOrNull(indiceWeb)?.url) falloWeb()
+            }
+        }
+        w.webChromeClient = object : WebChromeClient() {
+            override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+                if (vistaCompleta != null) {
+                    callback.onCustomViewHidden()
+                    return
+                }
+                vistaCompleta = view
+                callbackCompleta = callback
+                web?.visibility = View.GONE
+                raiz.addView(
+                    view,
+                    FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                )
+            }
+
+            override fun onHideCustomView() {
+                salirPantallaCompleta()
+            }
+        }
+        // Va encima del reproductor y debajo de la barra de controles
+        raiz.addView(
+            w,
+            1,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        web = w
+        return w
+    }
+
+    private fun mostrarWeb(lista: List<ServerLink>) {
         if (lista.isEmpty()) return
         player?.pause()
         guardarPosicion()
-        val i = Intent(this, EmbedActivity::class.java)
-        i.putExtra("urls", lista.map { it.url }.toTypedArray())
-        i.putExtra("nombres", lista.map { it.nombre }.toTypedArray())
-        startActivity(i)
-        finish()
+        urlsWeb = lista
+        indiceWeb = 0
+        fallosWeb = 0
+        reproduciendo = true
+        modoWeb = true
+        menuWebAbierto = false
+        vistaExo.visibility = View.GONE
+        asegurarWeb().visibility = View.VISIBLE
+        cargarWeb()
+        actualizarBarra()
     }
+
+    private fun cargarWeb() {
+        val srv = urlsWeb[indiceWeb]
+        Toast.makeText(this, "Servidor: " + srv.nombre, Toast.LENGTH_SHORT).show()
+        val seguro = srv.url.replace("&", "&amp;").replace("\"", "&quot;")
+        // Igual que AnimeHub: el reproductor va en un iframe dentro de una página propia
+        val html = "<!DOCTYPE html><html><head>" +
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
+            "<style>html,body{margin:0;height:100%;background:#000}" +
+            "iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0}</style>" +
+            "</head><body><iframe src=\"" + seguro + "\" " +
+            "sandbox=\"allow-scripts allow-same-origin allow-forms allow-presentation\" " +
+            "allow=\"autoplay; fullscreen; encrypted-media; picture-in-picture\" " +
+            "allowfullscreen></iframe></body></html>"
+        web?.loadDataWithBaseURL("https://localhost/", html, "text/html", "utf-8", null)
+    }
+
+    private fun falloWeb() {
+        fallosWeb++
+        if (fallosWeb >= urlsWeb.size) {
+            Toast.makeText(
+                this,
+                "Ningún servidor web abrió. Prueba con ☰ y Servidores.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+        indiceWeb = (indiceWeb + 1) % urlsWeb.size
+        cargarWeb()
+    }
+
+    private fun ocultarWeb() {
+        modoWeb = false
+        menuWebAbierto = false
+        web?.let {
+            it.loadUrl("about:blank")
+            it.visibility = View.GONE
+        }
+        salirPantallaCompleta()
+        vistaExo.visibility = View.VISIBLE
+        actualizarBarra()
+    }
+
+    private fun salirPantallaCompleta() {
+        val v = vistaCompleta ?: return
+        raiz.removeView(v)
+        vistaCompleta = null
+        val cb = callbackCompleta
+        callbackCompleta = null
+        cb?.onCustomViewHidden()
+        if (modoWeb) web?.visibility = View.VISIBLE
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (vistaCompleta != null) {
+            salirPantallaCompleta()
+        } else {
+            @Suppress("DEPRECATION")
+            super.onBackPressed()
+        }
+    }
+
+    // ---------- ExoPlayer ----------
 
     private fun guardarPosicion() {
         val exo = player ?: return
@@ -280,6 +542,7 @@ class PlayerActivity : Activity() {
 
     private fun reproducir(servidor: ServerLink) {
         val exo = player ?: return
+        if (modoWeb) ocultarWeb()
 
         val fuenteDatos = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
@@ -317,6 +580,16 @@ class PlayerActivity : Activity() {
         exo.playWhenReady = true
     }
 
+    override fun onPause() {
+        super.onPause()
+        web?.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        web?.onResume()
+    }
+
     override fun onStop() {
         super.onStop()
         guardarPosicion()
@@ -327,5 +600,10 @@ class PlayerActivity : Activity() {
         super.onDestroy()
         player?.release()
         player = null
+        web?.let {
+            raiz.removeView(it)
+            it.destroy()
+        }
+        web = null
     }
 }
