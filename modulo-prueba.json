@@ -1,0 +1,34 @@
+{
+  "nombre": "Módulo de prueba",
+  "items": [
+    {
+      "titulo": "Big Buck Bunny",
+      "episodios": [
+        {
+          "titulo": "Película completa",
+          "servidores": [
+            { "nombre": "Servidor roto", "url": "https://example.com/no-existe.mp4", "tipo": "mp4" },
+            { "nombre": "Servidor MP4", "url": "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4", "tipo": "mp4" }
+          ]
+        }
+      ]
+    },
+    {
+      "titulo": "Serie de prueba",
+      "episodios": [
+        {
+          "titulo": "Episodio 1",
+          "servidores": [
+            { "nombre": "HLS", "url": "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8", "tipo": "hls" }
+          ]
+        },
+        {
+          "titulo": "Episodio 2",
+          "servidores": [
+            { "nombre": "MP4", "url": "https://storage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4", "tipo": "mp4" }
+          ]
+        }
+      ]
+    }
+  ]
+}
