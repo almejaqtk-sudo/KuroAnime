@@ -4,51 +4,148 @@ import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URL
+import java.util.UUID
 
 object Repositorio {
 
     class Resultado(val modulos: List<Modulo>, val errores: List<String>)
 
-    fun leerUrls(prefs: SharedPreferences): MutableList<String> {
-        val lista = mutableListOf<String>()
-        val guardado = prefs.getString("modulos", null)
+    class Instalado(
+        val id: String,
+        val nombre: String,
+        var categoria: String,
+        val tipo: String, // "url" o "codigo"
+        val valor: String, // la URL o el texto JSON del módulo
+        var activo: Boolean
+    )
+
+    val CATEGORIAS = listOf("Anime", "Películas", "Series", "Otros")
+
+    private fun nuevoId(): String = UUID.randomUUID().toString().take(8)
+
+    private fun nombreDeUrl(u: String): String {
+        val n = u.substringAfterLast("/").removeSuffix(".json")
+        return if (n.isEmpty()) u else n
+    }
+
+    fun leerInstalados(prefs: SharedPreferences): MutableList<Instalado> {
+        val lista = mutableListOf<Instalado>()
+        val guardado = prefs.getString("mods2", null)
         if (guardado != null) {
             val arr = JSONArray(guardado)
-            for (i in 0 until arr.length()) lista.add(arr.getString(i))
-        } else {
-            val vieja = prefs.getString("url", "") ?: ""
-            if (vieja.isNotEmpty()) {
-                lista.add(vieja)
-                guardarUrls(prefs, lista)
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                lista.add(
+                    Instalado(
+                        o.getString("id"),
+                        o.getString("nombre"),
+                        o.optString("categoria", "Anime"),
+                        o.getString("tipo"),
+                        o.getString("valor"),
+                        o.optBoolean("activo", true)
+                    )
+                )
             }
+        } else {
+            // Migración desde la lista antigua de URLs
+            val viejas = mutableListOf<String>()
+            val g = prefs.getString("modulos", null)
+            if (g != null) {
+                val arr = JSONArray(g)
+                for (i in 0 until arr.length()) viejas.add(arr.getString(i))
+            } else {
+                val v = prefs.getString("url", "") ?: ""
+                if (v.isNotEmpty()) viejas.add(v)
+            }
+            for (u in viejas) {
+                lista.add(Instalado(nuevoId(), nombreDeUrl(u), "Anime", "url", u, true))
+            }
+            if (lista.isNotEmpty()) guardarInstalados(prefs, lista)
         }
         return lista
     }
 
-    fun guardarUrls(prefs: SharedPreferences, lista: List<String>) {
+    fun guardarInstalados(prefs: SharedPreferences, lista: List<Instalado>) {
         val arr = JSONArray()
-        for (u in lista) arr.put(u)
+        for (m in lista) {
+            val o = JSONObject()
+            o.put("id", m.id)
+            o.put("nombre", m.nombre)
+            o.put("categoria", m.categoria)
+            o.put("tipo", m.tipo)
+            o.put("valor", m.valor)
+            o.put("activo", m.activo)
+            arr.put(o)
+        }
         prefs.edit()
-            .putString("modulos", arr.toString())
+            .putString("mods2", arr.toString())
             .putInt("modulos_ver", prefs.getInt("modulos_ver", 0) + 1)
             .apply()
     }
 
-    fun cargarTodo(urls: List<String>): Resultado {
+    // Lo que MainActivity carga: URLs o el texto del módulo, solo de los activos
+    fun leerUrls(prefs: SharedPreferences): MutableList<String> =
+        leerInstalados(prefs).filter { it.activo }.map { it.valor }.toMutableList()
+
+    fun instalarTexto(prefs: SharedPreferences, texto: String, categoria: String): String {
+        val t = texto.trim()
+        if (t.isEmpty()) throw IllegalArgumentException("Está vacío")
+        val lista = leerInstalados(prefs)
+
+        if (t.startsWith("http")) {
+            if (lista.any { it.valor == t }) throw IllegalArgumentException("Ya está instalado")
+            val nombre = nombreDeUrl(t)
+            lista.add(Instalado(nuevoId(), nombre, categoria, "url", t, true))
+            guardarInstalados(prefs, lista)
+            return nombre
+        }
+
+        val raiz = JSONObject(t)
+        val nombre = if (raiz.has("modulos")) {
+            raiz.optString("nombre", "Índice de módulos")
+        } else {
+            ModuloParser.parse(t).nombre
+        }
+        lista.add(Instalado(nuevoId(), nombre, categoria, "codigo", t, true))
+        guardarInstalados(prefs, lista)
+        return nombre
+    }
+
+    fun cambiarCategoria(prefs: SharedPreferences, id: String, categoria: String) {
+        val lista = leerInstalados(prefs)
+        lista.firstOrNull { it.id == id }?.categoria = categoria
+        guardarInstalados(prefs, lista)
+    }
+
+    fun alternarActivo(prefs: SharedPreferences, id: String) {
+        val lista = leerInstalados(prefs)
+        val m = lista.firstOrNull { it.id == id } ?: return
+        m.activo = !m.activo
+        guardarInstalados(prefs, lista)
+    }
+
+    fun eliminar(prefs: SharedPreferences, id: String) {
+        val lista = leerInstalados(prefs)
+        lista.removeAll { it.id == id }
+        guardarInstalados(prefs, lista)
+    }
+
+    fun cargarTodo(fuentes: List<String>): Resultado {
         val modulos = mutableListOf<Modulo>()
         val errores = mutableListOf<String>()
-        for (u in urls) cargarUna(u, true, modulos, errores)
+        for (f in fuentes) cargarUna(f, true, modulos, errores)
         return Resultado(modulos, errores)
     }
 
     private fun cargarUna(
-        url: String,
+        fuente: String,
         permitirIndice: Boolean,
         modulos: MutableList<Modulo>,
         errores: MutableList<String>
     ) {
+        val esUrl = fuente.trimStart().startsWith("http")
         try {
-            val texto = URL(url).readText()
+            val texto = if (esUrl) URL(fuente.trim()).readText() else fuente
             val raiz = JSONObject(texto)
             val indice = raiz.optJSONArray("modulos")
             if (indice != null) {
@@ -61,7 +158,8 @@ object Repositorio {
                 modulos.add(ModuloParser.parse(texto))
             }
         } catch (e: Exception) {
-            errores.add(url.substringAfterLast("/") + ": " + (e.message ?: "error"))
+            val etiqueta = if (esUrl) fuente.substringAfterLast("/") else "módulo pegado"
+            errores.add(etiqueta + ": " + (e.message ?: "error"))
         }
     }
 }
