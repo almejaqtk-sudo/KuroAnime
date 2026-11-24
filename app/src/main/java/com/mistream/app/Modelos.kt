@@ -28,7 +28,9 @@ data class Item(
     val generos: List<String> = emptyList(),
     val tipo: String = "",
     val estado: String = "",
-    val ultimo: String = ""
+    val ultimo: String = "",
+    val id: String = "",
+    val fuente: String = ""
 )
 
 data class Modulo(val nombre: String, val items: List<Item>)
@@ -91,36 +93,43 @@ object ModuloParser {
         return Episodio(oe.getString("titulo"), servs)
     }
 
+    // Convierte un título (de JSON o de un módulo JS) en un Item.
+    // Los episodios son opcionales: si faltan, se piden después con episodios(id).
+    fun itemDeObjeto(oi: JSONObject, nombreModulo: String, fuente: String = ""): Item {
+        val eps = mutableListOf<Episodio>()
+        val arrEps = oi.optJSONArray("episodios")
+        if (arrEps != null) {
+            for (j in 0 until arrEps.length()) {
+                eps.add(episodioDeObjeto(arrEps.getJSONObject(j)))
+            }
+        }
+        val gs = mutableListOf<String>()
+        val ga = oi.optJSONArray("generos")
+        if (ga != null) {
+            for (g in 0 until ga.length()) gs.add(ga.getString(g))
+        }
+        return Item(
+            oi.getString("titulo"),
+            eps,
+            oi.optString("portada", ""),
+            oi.optString("descripcion", ""),
+            nombreModulo,
+            gs,
+            oi.optString("tipo", ""),
+            oi.optString("estado", ""),
+            oi.optString("ultimo", ""),
+            oi.optString("id", ""),
+            fuente
+        )
+    }
+
     fun parse(texto: String): Modulo {
         val raiz = JSONObject(texto)
         val nombreModulo = raiz.optString("nombre", "Módulo")
         val items = mutableListOf<Item>()
         val arrItems = raiz.getJSONArray("items")
         for (i in 0 until arrItems.length()) {
-            val oi = arrItems.getJSONObject(i)
-            val eps = mutableListOf<Episodio>()
-            val arrEps = oi.getJSONArray("episodios")
-            for (j in 0 until arrEps.length()) {
-                eps.add(episodioDeObjeto(arrEps.getJSONObject(j)))
-            }
-            val gs = mutableListOf<String>()
-            val ga = oi.optJSONArray("generos")
-            if (ga != null) {
-                for (g in 0 until ga.length()) gs.add(ga.getString(g))
-            }
-            items.add(
-                Item(
-                    oi.getString("titulo"),
-                    eps,
-                    oi.optString("portada", ""),
-                    oi.optString("descripcion", ""),
-                    nombreModulo,
-                    gs,
-                    oi.optString("tipo", ""),
-                    oi.optString("estado", ""),
-                    oi.optString("ultimo", "")
-                )
-            )
+            items.add(itemDeObjeto(arrItems.getJSONObject(i), nombreModulo))
         }
         return Modulo(nombreModulo, items)
     }
