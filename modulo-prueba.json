@@ -5,6 +5,10 @@
       "titulo": "Big Buck Bunny",
       "portada": "https://picsum.photos/seed/bunny/300/450",
       "descripcion": "Película de animación de prueba. El primer servidor está roto a propósito para probar el fallback.",
+      "generos": ["Animación", "Comedia"],
+      "tipo": "Película",
+      "estado": "Finalizado",
+      "ultimo": "Película",
       "episodios": [
         {
           "titulo": "Película completa",
@@ -20,6 +24,10 @@
       "titulo": "Serie de prueba",
       "portada": "https://picsum.photos/seed/serie/300/450",
       "descripcion": "Serie con tres episodios para probar el botón Siguiente y la función de continuar viendo.",
+      "generos": ["Acción", "Aventura"],
+      "tipo": "Serie",
+      "estado": "En emisión",
+      "ultimo": "Episodio 3",
       "episodios": [
         {
           "titulo": "Episodio 1",
@@ -46,6 +54,10 @@
       "titulo": "Flor",
       "portada": "https://picsum.photos/seed/flor/300/450",
       "descripcion": "Video corto de una flor.",
+      "generos": ["Documental"],
+      "tipo": "Corto",
+      "estado": "Finalizado",
+      "ultimo": "Video corto",
       "episodios": [
         {
           "titulo": "Video corto",
@@ -59,9 +71,13 @@
       "titulo": "Demo HLS",
       "portada": "https://picsum.photos/seed/hls/300/450",
       "descripcion": "Transmisión HLS de demostración con varias calidades.",
+      "generos": ["Acción"],
+      "tipo": "Serie",
+      "estado": "En emisión",
+      "ultimo": "Episodio 1",
       "episodios": [
         {
-          "titulo": "Demo",
+          "titulo": "Episodio 1",
           "servidores": [
             { "nombre": "HLS", "url": "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8", "tipo": "hls" }
           ]
