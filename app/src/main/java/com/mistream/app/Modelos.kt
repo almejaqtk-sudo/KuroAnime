@@ -18,7 +18,14 @@ data class ServerLink(
 )
 
 data class Episodio(val titulo: String, val servidores: List<ServerLink>)
-data class Item(val titulo: String, val episodios: List<Episodio>)
+
+data class Item(
+    val titulo: String,
+    val episodios: List<Episodio>,
+    val portada: String = "",
+    val descripcion: String = ""
+)
+
 data class Modulo(val nombre: String, val items: List<Item>)
 
 object ModuloParser {
@@ -90,7 +97,14 @@ object ModuloParser {
             for (j in 0 until arrEps.length()) {
                 eps.add(episodioDeObjeto(arrEps.getJSONObject(j)))
             }
-            items.add(Item(oi.getString("titulo"), eps))
+            items.add(
+                Item(
+                    oi.getString("titulo"),
+                    eps,
+                    oi.optString("portada", ""),
+                    oi.optString("descripcion", "")
+                )
+            )
         }
         return Modulo(raiz.optString("nombre", "Módulo"), items)
     }
