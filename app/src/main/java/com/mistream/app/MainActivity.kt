@@ -197,12 +197,13 @@ class MainActivity : Activity() {
         btnCargarMas = TextView(this)
         btnCargarMas.text = "Cargar más"
         btnCargarMas.gravity = Gravity.CENTER
-        btnCargarMas.textSize = 18f
+        btnCargarMas.textSize = 16f
         btnCargarMas.setTypeface(null, Typeface.BOLD)
         btnCargarMas.setTextColor(Color.WHITE)
         btnCargarMas.background = Ui.fondo(this, Color.parseColor("#29263F"), 22)
-        btnCargarMas.setPadding(dp(12), dp(16), dp(12), dp(16))
-        val lpMas = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        btnCargarMas.setPadding(dp(12), 0, dp(12), 0)
+        val lpMas = LinearLayout.LayoutParams(dp(220), dp(48))
+        lpMas.gravity = Gravity.CENTER_HORIZONTAL
         lpMas.topMargin = dp(10)
         lpMas.bottomMargin = dp(10)
         contenido.addView(btnCargarMas, lpMas)
@@ -444,10 +445,15 @@ class MainActivity : Activity() {
             actualizar()
             return
         }
+        // Guardar la posición antes de cualquier refresco del GridView (también mientras carga).
+        val posicionScroll = grilla.firstVisiblePosition
+        val vistaArriba = grilla.getChildAt(0)
+        val desplazamientoScroll = vistaArriba?.top ?: 0
         cargandoInicio = true
         val pagina = paginaInicio
         val token = ++tokenInicio
         actualizar()
+        grilla.post { grilla.setSelectionFromTop(posicionScroll, desplazamientoScroll) }
         Thread {
             var error: String? = null
             val nuevos = try {
@@ -474,6 +480,9 @@ class MainActivity : Activity() {
                     Repositorio.agregarARegistro(unicos)
                 }
                 actualizar()
+                // actualizar() reconstruye el GridView; devolverlo a la misma posición evita
+                // que al pulsar «Cargar más» salte al inicio del catálogo.
+                grilla.post { grilla.setSelectionFromTop(posicionScroll, desplazamientoScroll) }
             }
         }.start()
     }

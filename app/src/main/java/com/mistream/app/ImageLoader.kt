@@ -50,19 +50,39 @@ object ImageLoader {
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
     }
 
-    // Lee la imagen del disco o la descarga (se llama desde un hilo del pool)
+    private fun descargar(url: String, referer: String): ByteArray? {
+        val con = URL(url).openConnection() as HttpURLConnection
+        try {
+            con.connectTimeout = 15000
+            con.readTimeout = 15000
+            con.instanceFollowRedirects = true
+            con.setRequestProperty(
+                "User-Agent",
+                "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
+            )
+            con.setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+            con.setRequestProperty("Referer", referer)
+            val codigo = con.responseCode
+            if (codigo !in 200..299) return null
+            val tipo = con.contentType?.lowercase().orEmpty()
+            if (tipo.isNotEmpty() && !tipo.startsWith("image/") && !tipo.contains("octet-stream")) return null
+            return con.inputStream.use { it.readBytes() }
+        } finally {
+            con.disconnect()
+        }
+    }
+
+    // Lee la imagen del disco o la descarga (se llama desde un hilo del pool).
+    // Primero prueba el origen del CDN y, si hay hotlink protection, el Referer del módulo VeoHentai.
     private fun obtener(url: String): Bitmap? {
         cache.get(url)?.let { return it }
         val archivo = File(dir(), nombreArchivo(url))
         val bytes = if (archivo.exists()) {
             archivo.readBytes()
         } else {
-            val con = URL(url).openConnection() as HttpURLConnection
-            con.connectTimeout = 10000
-            con.readTimeout = 10000
-            con.setRequestProperty("User-Agent", "Mozilla/5.0")
-            val b = con.inputStream.use { it.readBytes() }
-            con.disconnect()
+            val parsed = URL(url)
+            val origen = "${parsed.protocol}://${parsed.host}/"
+            val b = descargar(url, origen) ?: descargar(url, "https://veohentai.com/") ?: return null
             try {
                 archivo.writeBytes(b)
             } catch (e: Exception) {
