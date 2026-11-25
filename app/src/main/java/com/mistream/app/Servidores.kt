@@ -37,8 +37,8 @@ object Servidores {
         return when {
             l.contains("dub") || l.contains("latin") -> DUB
             l.contains("sub") -> SUB
-            e.contains("latino") || Regex("\\bdub\\b").containsMatchIn(e) -> DUB
-            Regex("\\bsub\\b").containsMatchIn(e) -> SUB
+            e.contains("latino") || e.contains("castellano") || Regex("\\bdub\\b").containsMatchIn(e) -> DUB
+            e.contains("subtitul") || Regex("\\bsub\\b").containsMatchIn(e) -> SUB
             else -> ""
         }
     }
@@ -65,7 +65,10 @@ object Servidores {
     fun nombresVisibles(lista: List<ServerLink>): List<String> {
         val cuenta = HashMap<String, Int>()
         return lista.map { s ->
-            val base = s.nombre.trim()
+            // El idioma ya va en la píldora: se quita del nombre ("Streamwish · Latino" -> "Streamwish")
+            val base = s.nombre.replace(
+                Regex("\\s*[·|\\-–—]\\s*(latino|espa[ñn]ol|castellano|subtitulado|sub)\\s*$", RegexOption.IGNORE_CASE), ""
+            ).trim().ifEmpty { s.nombre.trim() }
             val k = base + "|" + normalizarIdioma(s.idioma, s.nombre)
             val n = (cuenta[k] ?: 0) + 1
             cuenta[k] = n
