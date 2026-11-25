@@ -35,7 +35,7 @@ object Repositorio {
     }
 
     // ---- Módulo AnimeAV1 integrado en la app ----
-    private const val VERSION_INTEGRADO = 1
+    private const val VERSION_INTEGRADO = 2
     private const val MARCA_INTEGRADO = "// AnimeAV1 (módulo integrado en KuroAnime)"
 
     // Instala (o actualiza) el módulo AnimeAV1 que viene dentro de la app y lo deja de primero.
@@ -213,14 +213,21 @@ object Repositorio {
                 val mo = JSONObject()
                 mo.put("nombre", m.nombre)
                 mo.put("fuente", m.fuente.ifEmpty { m.items.firstOrNull()?.fuente ?: "" })
-                val gArr = JSONArray()
-                for ((gn, gi) in m.generos) {
-                    val go = JSONObject()
-                    go.put("n", gn)
-                    go.put("i", gi)
-                    gArr.put(go)
+                mo.put("icono", m.icono)
+                mo.put("version", m.version)
+                val fArr = JSONArray()
+                for (f in m.filtros) {
+                    val fo = JSONObject()
+                    fo.put("k", f.clave)
+                    fo.put("n", f.nombre)
+                    val oa = JSONArray()
+                    for ((on, oi) in f.opciones) {
+                        oa.put(JSONObject().put("n", on).put("i", oi))
+                    }
+                    fo.put("o", oa)
+                    fArr.put(fo)
                 }
-                mo.put("generos", gArr)
+                mo.put("filtros", fArr)
                 val lista = JSONArray()
                 for (item in m.items) {
                     val o = JSONObject()
@@ -282,15 +289,26 @@ object Repositorio {
                         )
                     )
                 }
-                val generos = mutableListOf<Pair<String, String>>()
-                val gArr = mo.optJSONArray("generos")
-                if (gArr != null) {
-                    for (k in 0 until gArr.length()) {
-                        val go = gArr.optJSONObject(k) ?: continue
-                        generos.add(Pair(go.optString("n"), go.optString("i")))
+                val filtros = mutableListOf<Filtro>()
+                val fArr = mo.optJSONArray("filtros")
+                if (fArr != null) {
+                    for (k in 0 until fArr.length()) {
+                        val fo = fArr.optJSONObject(k) ?: continue
+                        val oa = fo.optJSONArray("o") ?: continue
+                        val ops = mutableListOf<Pair<String, String>>()
+                        for (q in 0 until oa.length()) {
+                            val oo = oa.optJSONObject(q) ?: continue
+                            ops.add(Pair(oo.optString("n"), oo.optString("i")))
+                        }
+                        filtros.add(Filtro(fo.optString("k"), fo.optString("n"), ops))
                     }
                 }
-                modulos.add(Modulo(mo.getString("nombre"), lista, fuente, generos))
+                modulos.add(
+                    Modulo(
+                        mo.getString("nombre"), lista, fuente, filtros,
+                        mo.optString("icono", ""), mo.optString("version", "")
+                    )
+                )
             }
             if (modulos.isEmpty()) return null
             registro = modulos.flatMap { it.items }

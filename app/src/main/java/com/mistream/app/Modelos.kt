@@ -14,7 +14,9 @@ data class ServerLink(
     val url: String,
     val tipo: String = "auto",
     val headers: Map<String, String> = emptyMap(),
-    val subtitulos: List<Subtitulo> = emptyList()
+    val subtitulos: List<Subtitulo> = emptyList(),
+    // Idioma del servidor: "DUB" (audio en español), "SUB" (subtitulado) o vacío si no se sabe
+    val idioma: String = ""
 )
 
 data class Episodio(val titulo: String, val servidores: List<ServerLink>)
@@ -33,12 +35,22 @@ data class Item(
     val fuente: String = ""
 )
 
+// Un filtro que tiene el sitio (Género, Tipo, Estado, Año...). clave = nombre del parámetro del sitio,
+// opciones = (texto que se ve, valor que se manda al sitio)
+data class Filtro(
+    val clave: String,
+    val nombre: String,
+    val opciones: List<Pair<String, String>>
+)
+
 data class Modulo(
     val nombre: String,
     val items: List<Item>,
-    // Código del módulo (para pedirle más páginas) y sus géneros: (nombre, id en el sitio)
+    // Código del módulo (para pedirle más páginas) y los filtros que tiene su sitio
     val fuente: String = "",
-    val generos: List<Pair<String, String>> = emptyList()
+    val filtros: List<Filtro> = emptyList(),
+    val icono: String = "",
+    val version: String = ""
 )
 
 object ModuloParser {
@@ -68,7 +80,8 @@ object ModuloParser {
             o.getString("url"),
             o.optString("tipo", "auto"),
             headers,
-            subs
+            subs,
+            o.optString("idioma", "")
         )
     }
 
@@ -78,6 +91,7 @@ object ModuloParser {
         o.put("url", s.url)
         o.put("tipo", s.tipo)
         o.put("headers", JSONObject(s.headers))
+        o.put("idioma", s.idioma)
         val sa = JSONArray()
         for (sub in s.subtitulos) {
             val so = JSONObject()

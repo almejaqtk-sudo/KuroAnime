@@ -8,18 +8,24 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.Editable
 import android.text.TextUtils
 import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.widget.AbsListView
 import android.widget.BaseAdapter
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.GridView
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 
@@ -28,39 +34,59 @@ class MainActivity : Activity() {
     private lateinit var prefs: SharedPreferences
     private lateinit var cabecera: LinearLayout
     private lateinit var filtros: LinearLayout
+    private lateinit var scrollFiltros: HorizontalScrollView
     private lateinit var buscador: EditText
     private lateinit var titulo: TextView
     private lateinit var grilla: GridView
     private lateinit var pModulo: TextView
-    private lateinit var pGenero: TextView
-    private lateinit var pTipo: TextView
-    private lateinit var pEstado: TextView
     private val pestanas = mutableListOf<TextView>()
 
     private var pestana = 0
     private var todos: List<Item> = emptyList()
     private var nombresModulos: List<String> = emptyList()
     private var moduloSel: String? = null
+    private var visibles: List<Item> = emptyList()
+    private var versionCargada = -1
+    private var modulosCargados: List<Modulo> = emptyList()
+
+    // Filtros locales (solo si ningún módulo trae los filtros de su sitio): Género / Tipo / Estado
     private val generosSel = mutableSetOf<String>()
     private val tiposSel = mutableSetOf<String>()
     private val estadosSel = mutableSetOf<String>()
-    private var visibles: List<Item> = emptyList()
-    private var versionCargada = -1
 
-    // Filtro de género que hace el propio sitio (trae todas las páginas, no solo lo ya cargado)
-    private var modulosCargados: List<Modulo> = emptyList()
-    private var generoSel: String? = null
-    private var itemsGenero: List<Item> = emptyList()
-    private var paginaGenero = 1
-    private var cargandoGenero = false
-    private var finGenero = false
-    private var tokenGenero = 0
+    // Filtros del propio sitio: nombre del filtro ("Género") -> opción elegida ("Acción").
+    // El sitio hace el filtrado, así que trae todas las páginas y no solo lo ya cargado.
+    private val seleccion = LinkedHashMap<String, String>()
+    private var itemsFiltro: List<Item> = emptyList()
+    private var paginaFiltro = 1
+    private var cargandoFiltro = false
+    private var finFiltro = false
+    private var tokenFiltro = 0
+
+    // Búsqueda por nombre en el sitio de cada módulo
+    private val handler = Handler(Looper.getMainLooper())
+    private val lanzarBusqueda = Runnable { iniciarBusqueda() }
+    private var consulta = ""
+    private var itemsBusqueda: List<Item> = emptyList()
+    private var paginaBusqueda = 1
+    private var cargandoBusqueda = false
+    private var finBusqueda = false
+    private var tokenBusqueda = 0
+
+    // Un filtro tal como lo ve la persona, con las opciones de todos los módulos que lo tienen:
+    // opción -> lista de (módulo, parámetro del sitio, valor en el sitio)
+    private class FiltroUI(val nombre: String) {
+        val opciones = LinkedHashMap<String, MutableList<Triple<Modulo, String, String>>>()
+    }
 
     private fun dp(v: Int) = Ui.dp(this, v)
 
-    private fun pesoLp(): LinearLayout.LayoutParams {
-        val p = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        p.setMargins(dp(3), 0, dp(3), 0)
+    private fun lpPildora(): LinearLayout.LayoutParams {
+        val p = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+        p.setMargins(0, 0, dp(8), 0)
         return p
     }
 
@@ -111,6 +137,7 @@ class MainActivity : Activity() {
         buscador.setHintTextColor(Ui.GRIS)
         buscador.setTextColor(Color.WHITE)
         buscador.setSingleLine()
+        buscador.imeOptions = EditorInfo.IME_ACTION_SEARCH
         buscador.background = Ui.fondo(this, Ui.PILDORA, 22, Ui.BORDE)
         buscador.setPadding(dp(16), dp(10), dp(16), dp(10))
         buscador.visibility = View.GONE
@@ -121,21 +148,24 @@ class MainActivity : Activity() {
         lpBuscador.topMargin = dp(4)
         contenido.addView(buscador, lpBuscador)
 
-        // Filtros
+        // Filtros: uno por cada filtro que tenga el sitio del módulo (Género, Tipo, Estado, Año...)
         filtros = LinearLayout(this)
         filtros.orientation = LinearLayout.HORIZONTAL
-        pGenero = Ui.pildora(this, "Género (0) ▾", 13f)
-        pTipo = Ui.pildora(this, "Tipo (0) ▾", 13f)
-        pEstado = Ui.pildora(this, "Estado (0) ▾", 13f)
-        filtros.addView(pGenero, pesoLp())
-        filtros.addView(pTipo, pesoLp())
-        filtros.addView(pEstado, pesoLp())
+        scrollFiltros = HorizontalScrollView(this)
+        scrollFiltros.isHorizontalScrollBarEnabled = false
+        scrollFiltros.addView(
+            filtros,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
         val lpFiltros = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         )
         lpFiltros.topMargin = dp(14)
-        contenido.addView(filtros, lpFiltros)
+        contenido.addView(scrollFiltros, lpFiltros)
 
         // Título de sección
         titulo = TextView(this)
@@ -196,33 +226,38 @@ class MainActivity : Activity() {
 
         // Acciones
         pModulo.setOnClickListener { dialogoModulo() }
-        pGenero.setOnClickListener { abrirGeneros() }
-        pTipo.setOnClickListener {
-            dialogoFiltro("Tipo", todos.map { it.tipo }.filter { it.isNotEmpty() }.distinct().sorted(), tiposSel, pTipo)
-        }
-        pEstado.setOnClickListener {
-            dialogoFiltro("Estado", todos.map { it.estado }.filter { it.isNotEmpty() }.distinct().sorted(), estadosSel, pEstado)
-        }
 
         buscador.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
             override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
             override fun afterTextChanged(s: Editable?) {
-                actualizar()
+                // Espera un momento a que termines de escribir antes de buscar en el sitio
+                handler.removeCallbacks(lanzarBusqueda)
+                handler.postDelayed(lanzarBusqueda, 450)
             }
         })
+        buscador.setOnEditorActionListener { _, accion, _ ->
+            if (accion == EditorInfo.IME_ACTION_SEARCH) {
+                handler.removeCallbacks(lanzarBusqueda)
+                iniciarBusqueda()
+                true
+            } else false
+        }
 
         grilla.setOnItemClickListener { _, _, pos, _ ->
             if (pos in visibles.indices) abrirDetalle(visibles[pos])
         }
 
-        // Al llegar al final de un género se piden más títulos
+        // Al llegar al final se piden más títulos (filtro del sitio o búsqueda)
         grilla.setOnScrollListener(object : AbsListView.OnScrollListener {
             override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) {}
             override fun onScroll(view: AbsListView?, first: Int, visible: Int, total: Int) {
-                if (pestana == 0 && generoSel != null && !cargandoGenero && !finGenero &&
-                    total > 0 && first + visible >= total - 3
-                ) cargarGenero(false)
+                if (total <= 0 || first + visible < total - 3) return
+                if (pestana == 0 && seleccion.isNotEmpty() && !cargandoFiltro && !finFiltro) {
+                    cargarFiltro(false)
+                } else if (pestana == 1 && consulta.isNotEmpty() && !cargandoBusqueda && !finBusqueda) {
+                    cargarBusqueda(false)
+                }
             }
         })
 
@@ -285,36 +320,66 @@ class MainActivity : Activity() {
         val sel = moduloSel
         if (sel != null && !nombresModulos.contains(sel)) moduloSel = null
         pModulo.text = (moduloSel ?: "Todos") + " ▾"
+        reconstruirFiltros()
         actualizar()
     }
 
-    private fun pasaFiltros(item: Item): Boolean {
+    private fun moduloPasa(item: Item): Boolean {
         val sel = moduloSel
-        if (sel != null && item.modulo != sel) return false
-        if (generoSel == null && generosSel.isNotEmpty() &&
-            item.generos.none { generosSel.contains(it) }
-        ) return false
+        return sel == null || item.modulo == sel
+    }
+
+    // Filtros locales: solo se usan cuando ningún módulo trae los filtros de su sitio
+    private fun pasaFiltrosLocales(item: Item): Boolean {
+        if (!moduloPasa(item)) return false
+        if (generosSel.isNotEmpty() && item.generos.none { generosSel.contains(it) }) return false
         if (tiposSel.isNotEmpty() && !tiposSel.contains(item.tipo)) return false
         if (estadosSel.isNotEmpty() && !estadosSel.contains(item.estado)) return false
         return true
     }
 
+    // Módulos que saben buscar por nombre en su sitio (formato AnimeHub)
+    private fun modulosBuscables(): List<Modulo> = modulosCargados.filter {
+        it.fuente.isNotEmpty() && MotorHub.esFormatoHub(it.fuente) &&
+            (moduloSel == null || it.nombre == moduloSel)
+    }
+
     private fun actualizar() {
-        val q = buscador.text.toString().trim().lowercase()
         val favs = Favoritos.leer(prefs)
 
         when (pestana) {
             0 -> {
-                val g = generoSel
-                visibles = (if (g != null) itemsGenero else todos).filter { pasaFiltros(it) }
-                titulo.text = if (g != null) "Género: $g" else "Últimos episodios"
-                if (g != null && visibles.isEmpty() && !cargandoGenero) {
-                    titulo.text = "Sin resultados en $g"
+                if (seleccion.isNotEmpty()) {
+                    visibles = itemsFiltro.filter { moduloPasa(it) }
+                    val texto = seleccion.entries.joinToString(" · ") { it.key + ": " + it.value }
+                    titulo.text = when {
+                        visibles.isEmpty() && cargandoFiltro -> "Cargando $texto..."
+                        visibles.isEmpty() -> "Sin resultados en $texto"
+                        else -> texto
+                    }
+                } else {
+                    visibles = todos.filter { pasaFiltrosLocales(it) }
+                    titulo.text = "Últimos episodios"
                 }
             }
             1 -> {
-                visibles = if (q.isEmpty()) todos else todos.filter { it.titulo.lowercase().contains(q) }
-                titulo.text = if (q.isEmpty()) "Todo el catálogo" else "Resultados"
+                if (consulta.isEmpty()) {
+                    visibles = todos.filter { moduloPasa(it) }
+                    titulo.text = "Todo el catálogo"
+                } else {
+                    // Resultados del sitio + coincidencias locales de módulos que no saben buscar
+                    val buscables = modulosBuscables().map { it.nombre }.toSet()
+                    val q = consulta.lowercase()
+                    val locales = todos.filter {
+                        moduloPasa(it) && it.modulo !in buscables && it.titulo.lowercase().contains(q)
+                    }
+                    visibles = itemsBusqueda + locales
+                    titulo.text = when {
+                        visibles.isEmpty() && cargandoBusqueda -> "Buscando \"$consulta\"..."
+                        visibles.isEmpty() -> "Sin resultados para \"$consulta\""
+                        else -> "Resultados para \"$consulta\""
+                    }
+                }
             }
             else -> {
                 visibles = todos.filter { favs.contains(it.titulo) }
@@ -327,8 +392,9 @@ class MainActivity : Activity() {
             titulo.text = "Mi lista vacía. Abre un título y toca ☆ Mi lista."
         }
 
-        cabecera.visibility = if (pestana == 0) View.VISIBLE else View.GONE
-        filtros.visibility = if (pestana == 0) View.VISIBLE else View.GONE
+        cabecera.visibility = if (pestana <= 1) View.VISIBLE else View.GONE
+        scrollFiltros.visibility =
+            if (pestana == 0 && filtros.childCount > 0) View.VISIBLE else View.GONE
         buscador.visibility = if (pestana == 1) View.VISIBLE else View.GONE
 
         grilla.adapter = AdaptadorGrilla(visibles)
@@ -338,108 +404,266 @@ class MainActivity : Activity() {
         }
     }
 
+    // ---------- Selector de módulo (con la imagen de cada página) ----------
+
     private fun dialogoModulo() {
-        val opciones = listOf("Todos") + nombresModulos
-        AlertDialog.Builder(this)
-            .setTitle("Módulo")
-            .setItems(opciones.toTypedArray()) { _, i ->
-                moduloSel = if (i == 0) null else opciones[i]
-                pModulo.text = (moduloSel ?: "Todos") + " ▾"
-                // Cada módulo tiene sus propios géneros: se quita el filtro de género anterior
-                elegirGenero(null)
+        val instalados = Repositorio.leerInstalados(prefs).filter { it.activo }
+        val dialogo = AlertDialog.Builder(this).create()
+        dialogo.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+
+        val caja = LinearLayout(this)
+        caja.orientation = LinearLayout.VERTICAL
+        caja.setPadding(dp(16), dp(24), dp(16), dp(20))
+        caja.background = Ui.fondo(this, Color.parseColor("#262A36"), 28)
+
+        val puzzle = TextView(this)
+        puzzle.text = "🧩"
+        puzzle.textSize = 34f
+        puzzle.gravity = Gravity.CENTER
+        caja.addView(puzzle)
+
+        fun elegir(nombre: String?) {
+            dialogo.dismiss()
+            if (nombre == moduloSel) return
+            moduloSel = nombre
+            pModulo.text = (moduloSel ?: "Todos") + " ▾"
+            // Cada módulo tiene sus propios filtros: se limpia lo que estaba elegido
+            seleccion.clear()
+            generosSel.clear(); tiposSel.clear(); estadosSel.clear()
+            tokenFiltro++
+            itemsFiltro = emptyList()
+            cargandoFiltro = false
+            finFiltro = false
+            reconstruirFiltros()
+            if (consulta.isNotEmpty()) iniciarBusqueda() else actualizar()
+        }
+
+        caja.addView(
+            filaModulo("Todos los módulos", "", "", moduloSel == null) { elegir(null) }
+        )
+
+        // Los módulos se agrupan por categoría (ANIME, PELÍCULAS...)
+        val porCategoria = nombresModulos.groupBy { n ->
+            instalados.firstOrNull { it.nombre == n }?.categoria ?: "Anime"
+        }
+        val orden = Repositorio.CATEGORIAS.filter { porCategoria.containsKey(it) } +
+            porCategoria.keys.filter { it !in Repositorio.CATEGORIAS }
+        for (cat in orden) {
+            val cab = TextView(this)
+            cab.text = cat.uppercase()
+            cab.setTextColor(Color.parseColor("#C7CBE0"))
+            cab.textSize = 15f
+            cab.setTypeface(null, Typeface.BOLD)
+            cab.gravity = Gravity.CENTER
+            cab.setPadding(0, dp(18), 0, dp(6))
+            caja.addView(cab)
+            for (n in porCategoria[cat] ?: emptyList()) {
+                val m = modulosCargados.firstOrNull { it.nombre == n }
+                caja.addView(
+                    filaModulo(n, m?.icono ?: "", m?.version ?: "", moduloSel == n) { elegir(n) }
+                )
             }
-            .show()
+        }
+
+        val scroll = ScrollView(this)
+        scroll.addView(caja)
+        dialogo.setView(scroll)
+        dialogo.show()
     }
 
-    // Géneros disponibles (nombre -> módulos que lo tienen y su id en el sitio)
-    private fun destinosGeneros(): LinkedHashMap<String, MutableList<Pair<Modulo, String>>> {
-        val mapa = LinkedHashMap<String, MutableList<Pair<Modulo, String>>>()
+    private fun filaModulo(
+        nombre: String,
+        icono: String,
+        version: String,
+        marcado: Boolean,
+        alTocar: () -> Unit
+    ): View {
+        val fila = LinearLayout(this)
+        fila.orientation = LinearLayout.HORIZONTAL
+        fila.gravity = Gravity.CENTER_VERTICAL
+        fila.setPadding(dp(8), dp(8), dp(8), dp(8))
+        fila.setOnClickListener { alTocar() }
+
+        // Imagen de la página; si no carga se ve la inicial del nombre
+        val marco = FrameLayout(this)
+        val inicial = TextView(this)
+        inicial.text = nombre.take(1).uppercase()
+        inicial.setTextColor(Color.WHITE)
+        inicial.textSize = 24f
+        inicial.setTypeface(null, Typeface.BOLD)
+        inicial.gravity = Gravity.CENTER
+        inicial.background = Ui.fondo(this, Color.parseColor("#3B3654"), 18)
+        marco.addView(inicial, FrameLayout.LayoutParams(dp(60), dp(60)))
+        if (icono.isNotEmpty()) {
+            val img = ImageView(this)
+            img.scaleType = ImageView.ScaleType.CENTER_CROP
+            Ui.redondear(img, dp(18).toFloat())
+            marco.addView(img, FrameLayout.LayoutParams(dp(60), dp(60)))
+            ImageLoader.cargar(icono, img)
+        }
+        fila.addView(marco, LinearLayout.LayoutParams(dp(60), dp(60)))
+
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.setPadding(dp(16), 0, 0, 0)
+        val tn = TextView(this)
+        tn.text = nombre
+        tn.setTextColor(if (marcado) Ui.ROSA else Color.parseColor("#E3E5F0"))
+        tn.textSize = 20f
+        tn.setTypeface(null, Typeface.BOLD)
+        col.addView(tn)
+        if (version.isNotEmpty()) {
+            val tv = TextView(this)
+            tv.text = version
+            tv.setTextColor(Color.parseColor("#9A9DB0"))
+            tv.textSize = 15f
+            tv.setTypeface(null, Typeface.BOLD)
+            col.addView(tv)
+        }
+        fila.addView(col, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        return fila
+    }
+
+    // ---------- Filtros del sitio (Género, Tipo, Estado, Año...) ----------
+
+    // Todos los filtros de los módulos activos, agrupados por nombre
+    private fun filtrosRemotos(): List<FiltroUI> {
+        val mapa = LinkedHashMap<String, FiltroUI>()
         for (m in modulosCargados) {
             if (moduloSel != null && m.nombre != moduloSel) continue
-            if (m.fuente.isEmpty()) continue
-            for ((nombre, id) in m.generos) {
-                mapa.getOrPut(nombre) { mutableListOf() }.add(Pair(m, id))
+            if (m.fuente.isEmpty() || !MotorHub.esFormatoHub(m.fuente)) continue
+            for (f in m.filtros) {
+                val ui = mapa.getOrPut(f.nombre) { FiltroUI(f.nombre) }
+                for ((nombreOp, valor) in f.opciones) {
+                    ui.opciones.getOrPut(nombreOp) { mutableListOf() }
+                        .add(Triple(m, f.clave, valor))
+                }
             }
         }
-        return mapa
+        return mapa.values.toList()
     }
 
-    private fun abrirGeneros() {
-        val mapa = destinosGeneros()
-        if (mapa.isEmpty()) {
-            // Módulos sin lista de géneros: se usan los géneros de los títulos ya cargados
-            dialogoFiltro(
-                "Género",
-                todos.flatMap { it.generos }.distinct().sorted(),
-                generosSel,
-                pGenero
-            )
-            return
-        }
-        val nombres = mapa.keys.toList()
-        AlertDialog.Builder(this)
-            .setTitle("Género")
-            .setSingleChoiceItems(nombres.toTypedArray(), (generoSel?.let { nombres.indexOf(it) } ?: -1)) { d, which ->
-                d.dismiss()
-                elegirGenero(nombres[which])
+    private fun textoPildora(nombre: String, n: Int) = "$nombre ($n) ▾"
+
+    // Crea las píldoras de filtro que corresponden al módulo elegido
+    private fun reconstruirFiltros() {
+        filtros.removeAllViews()
+        val remotos = filtrosRemotos()
+        if (remotos.isNotEmpty()) {
+            seleccion.keys.retainAll(remotos.map { it.nombre }.toSet())
+            for (f in remotos) {
+                val p = Ui.pildora(this, textoPildora(f.nombre, if (seleccion.containsKey(f.nombre)) 1 else 0), 13f)
+                p.setOnClickListener { dialogoFiltroRemoto(f, p) }
+                filtros.addView(p, lpPildora())
             }
-            .setNeutralButton("Limpiar") { _, _ -> elegirGenero(null) }
+        } else {
+            seleccion.clear()
+            // Sin filtros del sitio: se usan los datos de los títulos ya cargados.
+            // Solo aparecen los filtros que tengan opciones.
+            val locales = listOf(
+                Triple("Género", todos.filter { moduloPasa(it) }.flatMap { it.generos }.distinct().sorted(), generosSel),
+                Triple("Tipo", todos.filter { moduloPasa(it) }.map { it.tipo }.filter { it.isNotEmpty() }.distinct().sorted(), tiposSel),
+                Triple("Estado", todos.filter { moduloPasa(it) }.map { it.estado }.filter { it.isNotEmpty() }.distinct().sorted(), estadosSel)
+            )
+            for ((nombre, opciones, sel) in locales) {
+                if (opciones.isEmpty()) {
+                    sel.clear()
+                    continue
+                }
+                val p = Ui.pildora(this, textoPildora(nombre, sel.size), 13f)
+                p.setOnClickListener { dialogoFiltroLocal(nombre, opciones, sel, p) }
+                filtros.addView(p, lpPildora())
+            }
+        }
+        scrollFiltros.visibility =
+            if (pestana == 0 && filtros.childCount > 0) View.VISIBLE else View.GONE
+    }
+
+    private fun dialogoFiltroRemoto(f: FiltroUI, boton: TextView) {
+        val nombres = f.opciones.keys.toList()
+        AlertDialog.Builder(this)
+            .setTitle(f.nombre)
+            .setSingleChoiceItems(
+                nombres.toTypedArray(),
+                seleccion[f.nombre]?.let { nombres.indexOf(it) } ?: -1
+            ) { d, which ->
+                d.dismiss()
+                seleccion[f.nombre] = nombres[which]
+                aplicarSeleccion()
+            }
+            .setNeutralButton("Limpiar") { _, _ ->
+                seleccion.remove(f.nombre)
+                aplicarSeleccion()
+            }
             .setNegativeButton("Cancelar", null)
             .show()
     }
 
-    private fun elegirGenero(nombre: String?) {
-        generoSel = nombre
-        tokenGenero++
-        itemsGenero = emptyList()
-        paginaGenero = 1
-        finGenero = false
-        cargandoGenero = false
-        generosSel.clear()
-        pGenero.text = if (nombre == null) "Género (0) ▾" else "Género (1) ▾"
-        if (nombre == null) {
-            actualizar()
-        } else {
-            cargarGenero(true)
-        }
+    private fun aplicarSeleccion() {
+        tokenFiltro++
+        itemsFiltro = emptyList()
+        paginaFiltro = 1
+        finFiltro = false
+        cargandoFiltro = false
+        reconstruirFiltros()
+        if (seleccion.isEmpty()) actualizar() else cargarFiltro(true)
     }
 
-    private fun cargarGenero(primera: Boolean) {
-        val nombre = generoSel ?: return
-        if (cargandoGenero) return
-        val destinos = destinosGeneros()[nombre] ?: return
-        cargandoGenero = true
-        val token = tokenGenero
-        val pagina = paginaGenero
-        if (primera) {
-            actualizar()
-            titulo.text = "Cargando $nombre..."
+    // Módulos que tienen TODAS las opciones elegidas, con los parámetros que hay que mandarle a cada uno
+    private fun destinosFiltro(): List<Pair<Modulo, Map<String, String>>> {
+        val remotos = filtrosRemotos().associateBy { it.nombre }
+        var candidatos: LinkedHashMap<String, Pair<Modulo, LinkedHashMap<String, String>>>? = null
+        for ((nombreFiltro, nombreOpcion) in seleccion) {
+            val encontrados = remotos[nombreFiltro]?.opciones?.get(nombreOpcion) ?: emptyList()
+            val nuevos = LinkedHashMap<String, Pair<Modulo, LinkedHashMap<String, String>>>()
+            for ((modulo, clave, valor) in encontrados) {
+                val previos = candidatos
+                val parametros: LinkedHashMap<String, String> =
+                    if (previos == null) LinkedHashMap() else (previos[modulo.nombre]?.second ?: continue)
+                parametros[clave] = valor
+                nuevos[modulo.nombre] = Pair(modulo, parametros)
+            }
+            candidatos = nuevos
         }
+        return candidatos?.values?.map { Pair(it.first, it.second as Map<String, String>) } ?: emptyList()
+    }
+
+    private fun cargarFiltro(primera: Boolean) {
+        if (cargandoFiltro) return
+        val destinos = destinosFiltro()
+        if (destinos.isEmpty()) {
+            Toast.makeText(this, "Este módulo no tiene esa combinación de filtros", Toast.LENGTH_SHORT).show()
+            return
+        }
+        cargandoFiltro = true
+        val token = tokenFiltro
+        val pagina = paginaFiltro
+        if (primera) actualizar()
         Thread {
             val nuevos = mutableListOf<Item>()
             var error: String? = null
-            for ((modulo, id) in destinos) {
+            for ((modulo, parametros) in destinos) {
                 try {
-                    nuevos.addAll(MotorHub.catalogo(modulo.fuente, id, pagina))
+                    nuevos.addAll(MotorHub.catalogo(modulo.fuente, parametros, pagina))
                 } catch (e: Exception) {
                     error = e.message ?: "error"
                 }
             }
             val mensaje = error
             runOnUiThread {
-                if (token != tokenGenero) return@runOnUiThread
-                cargandoGenero = false
-                val existentes = itemsGenero.map { it.id + "|" + it.titulo }.toSet()
+                if (token != tokenFiltro) return@runOnUiThread
+                cargandoFiltro = false
+                val existentes = itemsFiltro.map { it.id + "|" + it.titulo }.toSet()
                 val unicos = nuevos.filter { (it.id + "|" + it.titulo) !in existentes }
                 if (unicos.isEmpty()) {
-                    finGenero = true
+                    finFiltro = true
                 } else {
-                    itemsGenero = itemsGenero + unicos
-                    paginaGenero = pagina + 1
+                    itemsFiltro = itemsFiltro + unicos
+                    paginaFiltro = pagina + 1
                     Repositorio.agregarARegistro(unicos)
                 }
-                if (mensaje != null && itemsGenero.isEmpty()) {
-                    Toast.makeText(this, "No cargó el género: $mensaje", Toast.LENGTH_LONG).show()
+                if (mensaje != null && itemsFiltro.isEmpty()) {
+                    Toast.makeText(this, "No cargó el filtro: $mensaje", Toast.LENGTH_LONG).show()
                 }
                 val posicion = if (primera) 0 else grilla.firstVisiblePosition
                 actualizar()
@@ -448,16 +672,12 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    private fun dialogoFiltro(
+    private fun dialogoFiltroLocal(
         nombre: String,
         opciones: List<String>,
         sel: MutableSet<String>,
         boton: TextView
     ) {
-        if (opciones.isEmpty()) {
-            Toast.makeText(this, "No hay opciones de $nombre en estos módulos", Toast.LENGTH_SHORT).show()
-            return
-        }
         val marcados = BooleanArray(opciones.size) { sel.contains(opciones[it]) }
         AlertDialog.Builder(this)
             .setTitle(nombre)
@@ -465,15 +685,75 @@ class MainActivity : Activity() {
                 if (marcado) sel.add(opciones[i]) else sel.remove(opciones[i])
             }
             .setPositiveButton("Aplicar") { _, _ ->
-                boton.text = "$nombre (${sel.size}) ▾"
+                boton.text = textoPildora(nombre, sel.size)
                 actualizar()
             }
             .setNeutralButton("Limpiar") { _, _ ->
                 sel.clear()
-                boton.text = "$nombre (0) ▾"
+                boton.text = textoPildora(nombre, 0)
                 actualizar()
             }
             .show()
+    }
+
+    // ---------- Búsqueda por nombre ----------
+
+    private fun iniciarBusqueda() {
+        val q = buscador.text.toString().trim()
+        consulta = q
+        tokenBusqueda++
+        itemsBusqueda = emptyList()
+        paginaBusqueda = 1
+        finBusqueda = false
+        cargandoBusqueda = false
+        if (q.isEmpty() || modulosBuscables().isEmpty()) {
+            finBusqueda = true
+            actualizar()
+        } else {
+            cargarBusqueda(true)
+        }
+    }
+
+    private fun cargarBusqueda(primera: Boolean) {
+        if (cargandoBusqueda || finBusqueda || consulta.isEmpty()) return
+        val modulos = modulosBuscables()
+        if (modulos.isEmpty()) return
+        cargandoBusqueda = true
+        val token = tokenBusqueda
+        val pagina = paginaBusqueda
+        val q = consulta
+        if (primera) actualizar()
+        Thread {
+            val nuevos = mutableListOf<Item>()
+            var error: String? = null
+            for (m in modulos) {
+                try {
+                    MotorHub.buscar(m.fuente, q, emptyMap(), pagina)?.let { nuevos.addAll(it) }
+                } catch (e: Exception) {
+                    error = e.message ?: "error"
+                }
+            }
+            val mensaje = error
+            runOnUiThread {
+                if (token != tokenBusqueda) return@runOnUiThread
+                cargandoBusqueda = false
+                val existentes = itemsBusqueda.map { it.id + "|" + it.titulo }.toSet()
+                val unicos = nuevos.filter { (it.id + "|" + it.titulo) !in existentes }
+                if (unicos.isEmpty()) {
+                    finBusqueda = true
+                } else {
+                    itemsBusqueda = itemsBusqueda + unicos
+                    paginaBusqueda = pagina + 1
+                    Repositorio.agregarARegistro(unicos)
+                }
+                if (mensaje != null && itemsBusqueda.isEmpty()) {
+                    Toast.makeText(this, "No se pudo buscar: $mensaje", Toast.LENGTH_LONG).show()
+                }
+                val posicion = if (primera) 0 else grilla.firstVisiblePosition
+                actualizar()
+                if (!primera) grilla.setSelection(posicion)
+            }
+        }.start()
     }
 
     private fun abrirDetalle(item: Item) {
@@ -486,6 +766,9 @@ class MainActivity : Activity() {
         intent.putExtra("descripcion", item.descripcion)
         intent.putExtra("meta", meta)
         intent.putExtra("episodios", ModuloParser.episodiosAJson(item.episodios))
+        // Se manda el enlace y el módulo directamente: así el anime abre aunque venga de un filtro o de la búsqueda
+        intent.putExtra("id", item.id)
+        intent.putExtra("fuente", item.fuente)
         startActivity(intent)
     }
 

@@ -18,6 +18,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 
@@ -46,6 +47,9 @@ class DetalleActivity : Activity() {
     private var descripcionActual = ""
     private var metaActual = ""
     private var episodiosJson = "[]"
+    private var idItem = ""
+    private var fuenteItem = ""
+    private var busquedaServidores = 0
     private var episodios: List<Episodio> = emptyList()
     private var indiceAccion = 0
     private var descendente = true
@@ -78,6 +82,8 @@ class DetalleActivity : Activity() {
         descripcionActual = intent.getStringExtra("descripcion") ?: ""
         metaActual = intent.getStringExtra("meta") ?: ""
         episodiosJson = intent.getStringExtra("episodios") ?: "[]"
+        idItem = intent.getStringExtra("id") ?: ""
+        fuenteItem = intent.getStringExtra("fuente") ?: ""
         episodios = ModuloParser.episodiosDeJson(episodiosJson)
         descendente = prefs.getBoolean("eps_desc", true)
 
@@ -325,16 +331,24 @@ class DetalleActivity : Activity() {
 
     // Módulos que traen solo el enlace del título: los episodios se piden al abrir
     private fun cargarEpisodiosRemotos() {
-        val item = Repositorio.buscarItem(titulo, portada)
-        if (item == null || item.fuente.isEmpty() || item.id.isEmpty()) {
+        // El enlace y el módulo llegan en el intent (también cuando el anime viene de un filtro o de la
+        // búsqueda). Si faltan, se busca el título en la lista cargada.
+        var fuente = fuenteItem
+        var id = idItem
+        if (fuente.isEmpty() || id.isEmpty()) {
+            val item = Repositorio.buscarItem(titulo, portada)
+            fuente = item?.fuente ?: ""
+            id = item?.id ?: ""
+        }
+        if (fuente.isEmpty() || id.isEmpty()) {
             tvEps.text = "Sin episodios"
             return
         }
         tvEps.text = "Cargando episodios..."
         Thread {
             try {
-                val eps = Motores.episodios(item.fuente, item.id)
-                val extra = MotorHub.metaDe(item.fuente, item.id)
+                val eps = Motores.episodios(fuente, id)
+                val extra = MotorHub.metaDe(fuente, id)
                 runOnUiThread {
                     episodios = eps
                     episodiosJson = ModuloParser.episodiosAJson(eps)
@@ -384,28 +398,92 @@ class DetalleActivity : Activity() {
             return
         }
         val s = episodios[indice].servidores
-        // Los módulos AnimeHub se abren directo: el reproductor busca los servidores y usa
-        // el que elegiste la última vez (o el más rápido), sin pasar por un diálogo.
-        if (s.size > 1) mostrarSelector(indice, s) else abrirReproductor(indice)
+        when {
+            // Módulos AnimeHub: primero se buscan los servidores que funcionan y se elige uno
+            s.size == 1 && s[0].tipo == "hub" -> elegirServidorHub(indice, s[0])
+            s.size > 1 -> elegirServidorLista(indice, s)
+            else -> abrirReproductor(indice)
+        }
     }
 
-    private fun mostrarSelector(indice: Int, servidores: List<ServerLink>) {
-        val pref = prefs.getString("srv_pref", null)
-        val etiquetas = servidores.map { s ->
-            (if (s.nombre == pref) "★ " else "") + s.nombre + when (s.tipo) {
-                "embed" -> "  · web"
-                "external" -> "  · navegador"
-                else -> ""
+    // Ventanita "Buscando servidores..." mientras se consultan y se comprueban
+    private fun ventanaBuscando(alCancelar: () -> Unit): AlertDialog {
+        val caja = LinearLayout(this)
+        caja.orientation = LinearLayout.HORIZONTAL
+        caja.gravity = Gravity.CENTER_VERTICAL
+        caja.setPadding(dp(24), dp(20), dp(24), dp(20))
+        caja.addView(ProgressBar(this), LinearLayout.LayoutParams(dp(36), dp(36)))
+        val t = TextView(this)
+        t.text = "Buscando servidores..."
+        t.setTextColor(Color.WHITE)
+        t.textSize = 16f
+        t.setPadding(dp(16), 0, 0, 0)
+        caja.addView(t)
+        val d = AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setView(caja)
+            .setOnCancelListener { alCancelar() }
+            .create()
+        d.show()
+        return d
+    }
+
+    private fun elegirServidorHub(indice: Int, marcador: ServerLink) {
+        val enCache = MotorHub.enCache(marcador)
+        if (enCache != null) {
+            mostrarSelector(indice, enCache)
+            return
+        }
+        val mi = ++busquedaServidores
+        val espera = ventanaBuscando { busquedaServidores++ }
+        Thread {
+            try {
+                val lista = MotorHub.resolverVideos(marcador, prefs)
+                runOnUiThread {
+                    espera.dismiss()
+                    if (isFinishing || mi != busquedaServidores) return@runOnUiThread
+                    if (lista.isEmpty()) {
+                        Toast.makeText(this, "No hay servidores funcionando para este episodio", Toast.LENGTH_LONG).show()
+                    } else {
+                        mostrarSelector(indice, lista)
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    espera.dismiss()
+                    if (isFinishing || mi != busquedaServidores) return@runOnUiThread
+                    Toast.makeText(
+                        this,
+                        "No se pudieron cargar los servidores: " + (e.message ?: "error"),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
             }
-        }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("Elegir servidor")
-            .setItems(etiquetas) { _, which ->
-                prefs.edit().putString("srv_pref", servidores[which].nombre).apply()
+        }.start()
+    }
+
+    // Módulos que ya traen varios servidores en el episodio: se comprueban y se elige
+    private fun elegirServidorLista(indice: Int, servidores: List<ServerLink>) {
+        val mi = ++busquedaServidores
+        val espera = ventanaBuscando { busquedaServidores++ }
+        Thread {
+            val buenos = Servidores.filtrarFuncionales(servidores)
+            runOnUiThread {
+                espera.dismiss()
+                if (isFinishing || mi != busquedaServidores) return@runOnUiThread
+                mostrarSelector(indice, buenos)
+            }
+        }.start()
+    }
+
+    // Elegir servidor: nombre a la izquierda y, al costado, la bandera (México = español, Japón = subtitulado)
+    private fun mostrarSelector(indice: Int, servidores: List<ServerLink>) {
+        Servidores.mostrarSelector(
+            this, "Elegir servidor", servidores, prefs.getString("srv_pref", null),
+            { which ->
+                prefs.edit().putString("srv_pref", Servidores.clave(servidores[which])).apply()
                 abrirReproductor(indice)
             }
-            .setNegativeButton("Cancelar", null)
-            .show()
+        )
     }
 
     private fun abrirReproductor(indice: Int) {

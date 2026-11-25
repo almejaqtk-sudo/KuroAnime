@@ -138,6 +138,9 @@ object MotorHub {
             j.put("portada", o.optString("cover", ""))
             j.put("id", url)
             j.put("ultimo", o.optString("sub", ""))
+            j.put("tipo", o.optString("type", ""))
+            j.put("estado", o.optString("status", ""))
+            o.optJSONArray("genres")?.let { j.put("generos", it) }
             items.add(ModuloParser.itemDeObjeto(j, nombre, codigo))
         }
         return items
@@ -155,38 +158,85 @@ object MotorHub {
         }
         val items = itemsDeTexto(texto, nombre, codigo)
 
-        val generos = mutableListOf<Pair<String, String>>()
-        if (inf.optBoolean("tieneGenres")) {
-            try {
+        val filtros = mutableListOf<Filtro>()
+        try {
+            if (inf.optBoolean("tieneFilters")) {
+                // El módulo dice qué filtros tiene su sitio: [{ key, name, options: [{ name, id }] }]
+                val fa = JSONArray(llamar(clave, codigo, "filters", "[]"))
+                for (i in 0 until fa.length()) {
+                    val f = fa.optJSONObject(i) ?: continue
+                    val key = f.optString("key", "")
+                    val oa = f.optJSONArray("options") ?: continue
+                    val ops = mutableListOf<Pair<String, String>>()
+                    for (k in 0 until oa.length()) {
+                        val o = oa.optJSONObject(k) ?: continue
+                        val n = o.optString("name", "")
+                        val gid = o.optString("id", n)
+                        if (n.isNotEmpty() && gid.isNotEmpty()) ops.add(Pair(n, gid))
+                    }
+                    if (key.isNotEmpty() && ops.isNotEmpty()) {
+                        filtros.add(Filtro(key, f.optString("name", key), ops))
+                    }
+                }
+            }
+            // Módulos que solo tienen genres(): se convierten en el filtro "Género"
+            if (filtros.none { it.clave == "genre" } && inf.optBoolean("tieneGenres")) {
                 val ga = JSONArray(llamar(clave, codigo, "genres", "[]"))
+                val ops = mutableListOf<Pair<String, String>>()
                 for (i in 0 until ga.length()) {
                     val g = ga.optJSONObject(i) ?: continue
                     val n = g.optString("name", "")
                     val gid = g.optString("id", n)
-                    if (n.isNotEmpty() && gid.isNotEmpty()) generos.add(Pair(n, gid))
+                    if (n.isNotEmpty() && gid.isNotEmpty()) ops.add(Pair(n, gid))
                 }
-            } catch (e: Exception) {
-                // sin géneros del módulo: la app usa los del catálogo cargado
+                if (ops.isNotEmpty()) filtros.add(0, Filtro("genre", "Género", ops))
             }
+        } catch (e: Exception) {
+            // sin filtros del módulo: la app usa lo que traen los títulos cargados
         }
-        return Modulo(nombre, items, codigo, generos)
+        return Modulo(nombre, items, codigo, filtros, iconoDe(inf), inf.optString("version", ""))
     }
 
-    // Una página del catálogo filtrada por género (el filtro lo hace el sitio, no la app)
-    fun catalogo(codigo: String, generoId: String, pagina: Int): List<Item> {
+    // Imagen del módulo: la que él declare o el favicon de su página
+    private fun iconoDe(inf: JSONObject): String {
+        val icon = inf.optString("icon", "")
+        if (icon.startsWith("http")) return icon
+        val base = inf.optString("baseUrl", "")
+        val host = try { URL(base).host } catch (e: Exception) { "" }
+        return if (host.isEmpty()) "" else "https://www.google.com/s2/favicons?domain=$host&sz=128"
+    }
+
+    private fun filtrosJson(filtros: Map<String, String>): JSONObject {
+        val o = JSONObject()
+        for ((k, v) in filtros) o.put(k, v)
+        return o
+    }
+
+    // Una página del catálogo con los filtros elegidos (genre, category, status...). Los filtra el sitio.
+    fun catalogo(codigo: String, filtros: Map<String, String>, pagina: Int): List<Item> {
         val clave = claveDe(codigo)
         val inf = info(codigo)
         val nombre = inf.optString("name", "Módulo")
-        val filtros = JSONObject().put("genre", generoId)
         val args = JSONArray()
         val metodo = if (inf.optBoolean("tieneHome")) {
-            args.put(pagina).put(filtros)
+            args.put(pagina).put(filtrosJson(filtros))
             "home"
         } else {
-            args.put("").put(pagina).put(filtros)
+            args.put("").put(pagina).put(filtrosJson(filtros))
             "search"
         }
         return itemsDeTexto(llamar(clave, codigo, metodo, args.toString()), nombre, codigo)
+    }
+
+    // Búsqueda por nombre en el sitio. Devuelve null si el módulo no sabe buscar.
+    fun buscar(codigo: String, consulta: String, filtros: Map<String, String>, pagina: Int): List<Item>? {
+        if (!esFormatoHub(codigo)) return null
+        val clave = claveDe(codigo)
+        val inf = info(codigo)
+        if (!inf.optBoolean("tieneSearch")) return null
+        val nombre = inf.optString("name", "Módulo")
+        val args = JSONArray().put(consulta).put(pagina).put(filtrosJson(filtros))
+        return itemsDeTexto(llamar(clave, codigo, "search", args.toString()), nombre, codigo)
     }
 
     // Descripción y géneros que devolvió details() la última vez (para la pantalla del anime)
@@ -310,13 +360,13 @@ object MotorHub {
                 }
             }
 
-            val idioma = v.optString("lang", "")
-            val nombre = v.optString("label", "").ifEmpty { "Servidor ${i + 1}" } +
-                (if (idioma.isNotEmpty()) " ($idioma)" else "")
-            val enlace = ServerLink(nombre, url, tipo, headers, subs)
+            val etiqueta = v.optString("label", "").ifEmpty { "Servidor ${i + 1}" }
+            val idioma = Servidores.normalizarIdioma(v.optString("lang", ""), etiqueta)
+            val enlace = ServerLink(etiqueta, url, tipo, headers, subs, idioma)
             if (tipo == "embed" || tipo == "external") web.add(enlace) else buenos.add(enlace)
         }
-        return (buenos + web).take(12)
+        // Solo se muestran los servidores que responden (los caídos se descartan)
+        return Servidores.filtrarFuncionales((buenos + web).take(16)).take(12)
     }
 }
 

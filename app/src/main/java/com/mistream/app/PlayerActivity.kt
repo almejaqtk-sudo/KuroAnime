@@ -29,6 +29,8 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
@@ -92,6 +94,7 @@ class PlayerActivity : Activity() {
     private var urlsWeb: List<ServerLink> = emptyList()
     private var indiceWeb = 0
     private var fallosWeb = 0
+    private var escalaWebSoportada = false
     private var vistaCompleta: View? = null
     private var callbackCompleta: WebChromeClient.CustomViewCallback? = null
 
@@ -329,31 +332,64 @@ class PlayerActivity : Activity() {
 
     // ---------- Escala: Ajustar / Rellenar / Alargar ----------
 
-    // Para servidores web: escala del iframe que simula ajustar, rellenar o alargar (video 16:9)
-    private fun transformWeb(idx: Int): String {
-        val w = raiz.width.toFloat()
-        val h = raiz.height.toFloat()
-        val f = if (h > 0f) Math.max(1f, (w / h) / (16f / 9f)) else 1.25f
-        return when (idx) {
-            1 -> "scale(" + f + ")"
-            2 -> "scale(" + f + ",1)"
-            else -> "none"
-        }
+    // Servidores web: se le pide al <video> de la página que se ajuste (object-fit). Solo cambia el video:
+    // la línea de tiempo y los botones del reproductor de la página no se agrandan ni se salen de cuadro.
+    private fun modoCss(idx: Int): String = when (idx) {
+        1 -> "cover"   // Rellenar
+        2 -> "fill"    // Alargar
+        else -> "contain" // Ajustar
     }
+
+    // Script que se mete en la página del reproductor (y en sus iframes) antes de que cargue
+    private val scriptEscala = """
+(function(){
+  if (window.__kuroEscala) return; window.__kuroEscala = true;
+  var modo = 'contain', st = null;
+  function aplicar(){
+    try {
+      if (!st || !st.isConnected) {
+        st = document.createElement('style');
+        (document.head || document.documentElement).appendChild(st);
+      }
+      st.textContent = 'video{object-fit:' + modo + ' !important;}';
+    } catch(e) {}
+  }
+  function reenviar(){
+    for (var i = 0; i < window.frames.length; i++) {
+      try { window.frames[i].postMessage({kuroEscala: modo}, '*'); } catch(e) {}
+    }
+  }
+  window.addEventListener('message', function(e){
+    var d = e.data;
+    if (d && typeof d === 'object' && d.kuroEscala) { modo = d.kuroEscala; aplicar(); reenviar(); }
+  });
+  aplicar();
+  document.addEventListener('DOMContentLoaded', aplicar);
+  setInterval(function(){ aplicar(); reenviar(); }, 1500);
+})();
+"""
 
     private fun cambiarEscala() {
         idxEscala = (idxEscala + 1) % modosEscala.size
         prefs.edit().putInt("escala_idx", idxEscala).apply()
         aplicarEscala()
         actualizarBarra()
-        if (modoWeb) mostrarBarraWeb()
+        if (modoWeb) {
+            if (!escalaWebSoportada && idxEscala != 0) {
+                Toast.makeText(
+                    this,
+                    "La escala en servidores web necesita un WebView más nuevo (actualiza Android System WebView)",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            mostrarBarraWeb()
+        }
     }
 
     private fun aplicarEscala() {
         vistaExo.resizeMode = modosEscala[idxEscala]
         web?.evaluateJavascript(
-            "var f=document.getElementById('f');if(f){f.style.transform='" +
-                transformWeb(idxEscala) + "';}",
+            "window.postMessage({kuroEscala:'" + modoCss(idxEscala) + "'},'*');",
             null
         )
     }
@@ -402,7 +438,7 @@ class PlayerActivity : Activity() {
         }
         // Módulos con varios servidores: primero el que elegiste
         val pref = prefs.getString("srv_pref", null)
-        listaServidores = servidores.sortedBy { if (it.nombre == pref) 0 else 1 }
+        listaServidores = servidores.sortedBy { if (Servidores.clave(it) == pref) 0 else 1 }
         reproduciendo = true
         actualizarBarra()
         usarServidor(0)
@@ -438,7 +474,22 @@ class PlayerActivity : Activity() {
                     }
                     // Si ya elegiste un servidor antes y este episodio lo tiene, se usa solo
                     val pref = prefs.getString("srv_pref", null)
-                    val idx = lista.indexOfFirst { it.nombre == pref }
+                    var idx = lista.indexOfFirst { Servidores.clave(it) == pref }
+                    if (idx < 0 && pref != null) {
+                        // Ese servidor no está en este episodio: se busca otro del mismo idioma
+                        val idioma = pref.substringAfterLast("|", "")
+                        if (idioma.isNotEmpty()) {
+                            idx = lista.indexOfFirst {
+                                Servidores.normalizarIdioma(it.idioma, it.nombre) == idioma &&
+                                    it.tipo != "embed" && it.tipo != "external"
+                            }
+                            if (idx < 0) {
+                                idx = lista.indexOfFirst {
+                                    Servidores.normalizarIdioma(it.idioma, it.nombre) == idioma
+                                }
+                            }
+                        }
+                    }
                     when {
                         idx >= 0 -> usarServidor(idx)
                         // Sin servidor elegido: se usa el primero que no sea web (carga más rápido)
@@ -460,22 +511,14 @@ class PlayerActivity : Activity() {
     }
 
     private fun mostrarSelector() {
-        val etiquetas = listaServidores.map { s ->
-            s.nombre + when (s.tipo) {
-                "embed" -> "  · web"
-                "external" -> "  · navegador"
-                else -> ""
-            }
-        }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("Elegir servidor")
-            .setItems(etiquetas) { _, which ->
-                prefs.edit().putString("srv_pref", listaServidores[which].nombre).apply()
+        Servidores.mostrarSelector(
+            this, "Elegir servidor", listaServidores, prefs.getString("srv_pref", null),
+            { which ->
+                prefs.edit().putString("srv_pref", Servidores.clave(listaServidores[which])).apply()
                 usarServidor(which)
-            }
-            .setNegativeButton("Cancelar", null)
-            .setOnCancelListener { if (!reproduciendo) finish() }
-            .show()
+            },
+            { if (!reproduciendo) finish() }
+        )
     }
 
     private fun usarServidor(idx: Int) {
@@ -514,6 +557,16 @@ class PlayerActivity : Activity() {
         s.javaScriptCanOpenWindowsAutomatically = false
         s.setSupportMultipleWindows(false)
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
+
+        // Para ajustar solo el video (sin tocar la línea de tiempo de la página)
+        escalaWebSoportada = try {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                WebViewCompat.addDocumentStartJavaScript(w, scriptEscala, setOf("*"))
+                true
+            } else false
+        } catch (e: Exception) {
+            false
+        }
 
         // Un toque en la pantalla muestra los botones (y el toque sigue llegando al reproductor)
         w.setOnTouchListener { _, ev ->
@@ -604,13 +657,14 @@ class PlayerActivity : Activity() {
         val html = "<!DOCTYPE html><html><head>" +
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
             "<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}" +
-            "iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0;" +
-            "transform-origin:center center}</style>" +
-            "</head><body><iframe id=\"f\" style=\"transform:" + transformWeb(idxEscala) + "\" " +
+            "iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0}</style>" +
+            "</head><body><iframe id=\"f\" " +
             "src=\"" + seguro + "\" " +
             "sandbox=\"allow-scripts allow-same-origin allow-forms allow-presentation\" " +
             "allow=\"autoplay; fullscreen; encrypted-media; picture-in-picture\" " +
-            "allowfullscreen></iframe></body></html>"
+            "allowfullscreen></iframe>" +
+            "<script>window.postMessage({kuroEscala:'" + modoCss(idxEscala) + "'},'*');</script>" +
+            "</body></html>"
         web?.loadDataWithBaseURL("https://localhost/", html, "text/html", "utf-8", null)
     }
 
