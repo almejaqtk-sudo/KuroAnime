@@ -33,7 +33,13 @@ data class Item(
     val fuente: String = ""
 )
 
-data class Modulo(val nombre: String, val items: List<Item>)
+data class Modulo(
+    val nombre: String,
+    val items: List<Item>,
+    // Código del módulo (para pedirle más páginas) y sus géneros: (nombre, id en el sitio)
+    val fuente: String = "",
+    val generos: List<Pair<String, String>> = emptyList()
+)
 
 object ModuloParser {
 

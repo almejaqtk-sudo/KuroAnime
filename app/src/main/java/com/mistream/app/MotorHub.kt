@@ -125,16 +125,7 @@ object MotorHub {
     // Se usa al instalar: compila el módulo y devuelve su nombre
     fun nombreDe(codigo: String): String = info(codigo).optString("name", "Módulo")
 
-    // Catálogo inicial: home(1), o search("", 1, {}) si no hay home
-    fun cargar(codigo: String): Modulo {
-        val clave = claveDe(codigo)
-        val inf = info(codigo)
-        val nombre = inf.optString("name", "Módulo")
-        val texto = if (inf.optBoolean("tieneHome")) {
-            llamar(clave, codigo, "home", "[1]")
-        } else {
-            llamar(clave, codigo, "search", "[\"\",1,{}]")
-        }
+    private fun itemsDeTexto(texto: String, nombre: String, codigo: String): List<Item> {
         val arr = JSONArray(texto)
         val items = mutableListOf<Item>()
         for (i in 0 until arr.length()) {
@@ -149,7 +140,61 @@ object MotorHub {
             j.put("ultimo", o.optString("sub", ""))
             items.add(ModuloParser.itemDeObjeto(j, nombre, codigo))
         }
-        return Modulo(nombre, items)
+        return items
+    }
+
+    // Catálogo inicial: home(1), o search("", 1, {}) si no hay home. Si el módulo tiene genres(), también los géneros.
+    fun cargar(codigo: String): Modulo {
+        val clave = claveDe(codigo)
+        val inf = info(codigo)
+        val nombre = inf.optString("name", "Módulo")
+        val texto = if (inf.optBoolean("tieneHome")) {
+            llamar(clave, codigo, "home", "[1]")
+        } else {
+            llamar(clave, codigo, "search", "[\"\",1,{}]")
+        }
+        val items = itemsDeTexto(texto, nombre, codigo)
+
+        val generos = mutableListOf<Pair<String, String>>()
+        if (inf.optBoolean("tieneGenres")) {
+            try {
+                val ga = JSONArray(llamar(clave, codigo, "genres", "[]"))
+                for (i in 0 until ga.length()) {
+                    val g = ga.optJSONObject(i) ?: continue
+                    val n = g.optString("name", "")
+                    val gid = g.optString("id", n)
+                    if (n.isNotEmpty() && gid.isNotEmpty()) generos.add(Pair(n, gid))
+                }
+            } catch (e: Exception) {
+                // sin géneros del módulo: la app usa los del catálogo cargado
+            }
+        }
+        return Modulo(nombre, items, codigo, generos)
+    }
+
+    // Una página del catálogo filtrada por género (el filtro lo hace el sitio, no la app)
+    fun catalogo(codigo: String, generoId: String, pagina: Int): List<Item> {
+        val clave = claveDe(codigo)
+        val inf = info(codigo)
+        val nombre = inf.optString("name", "Módulo")
+        val filtros = JSONObject().put("genre", generoId)
+        val args = JSONArray()
+        val metodo = if (inf.optBoolean("tieneHome")) {
+            args.put(pagina).put(filtros)
+            "home"
+        } else {
+            args.put("").put(pagina).put(filtros)
+            "search"
+        }
+        return itemsDeTexto(llamar(clave, codigo, metodo, args.toString()), nombre, codigo)
+    }
+
+    // Descripción y géneros que devolvió details() la última vez (para la pantalla del anime)
+    private val detalles = ConcurrentHashMap<String, Pair<String, String>>()
+
+    fun metaDe(codigo: String, id: String): Pair<String, String>? {
+        if (!esFormatoHub(codigo)) return null
+        return detalles[claveDe(codigo) + "|" + id]
     }
 
     // Se llama al abrir un título: details(url). Cada episodio queda como un marcador "hub"
@@ -157,20 +202,23 @@ object MotorHub {
     fun episodios(codigo: String, detalleUrl: String): List<Episodio> {
         val clave = claveDe(codigo)
         val d = JSONObject(llamar(clave, codigo, "details", JSONArray().put(detalleUrl).toString()))
+        val gs = d.optJSONArray("genres")
+        val gtxt = if (gs == null) "" else (0 until gs.length()).map { gs.optString(it) }
+            .filter { it.isNotEmpty() }.joinToString(", ")
+        detalles[clave + "|" + detalleUrl] = Pair(d.optString("description", ""), gtxt)
         val arr = d.optJSONArray("episodes") ?: JSONArray()
         val lista = mutableListOf<Episodio>()
         for (i in 0 until arr.length()) {
             val e = arr.optJSONObject(i) ?: continue
             val url = e.optString("url", "")
             if (url.isEmpty()) continue
-            val num = if (e.isNull("number")) "" else e.get("number").toString()
+            val num = if (e.isNull("number")) "" else e.get("number").toString().removeSuffix(".0")
             val t = e.optString("title", "").trim()
+            // Solo "Episodio N" (sin el nombre largo del anime)
             val titulo = when {
-                num.isEmpty() -> t.ifEmpty { "Episodio ${i + 1}" }
-                t.isEmpty() ||
-                    Regex("(?i)^\\s*(episodio|episode|ep\\.?|capítulo)?\\s*" + Regex.escape(num) + "\\s*$")
-                        .matches(t) -> "Episodio $num"
-                else -> "Episodio $num - $t"
+                num.isNotEmpty() -> "Episodio $num"
+                t.isNotEmpty() -> t.replace(Regex("(?i)\\s*[-–]\\s*ver\\s.*$"), "").trim()
+                else -> "Episodio ${i + 1}"
             }
             val marcador = ServerLink(
                 nombre = "Cargando servidores",
@@ -195,6 +243,12 @@ object MotorHub {
     private val cacheVideos = ConcurrentHashMap<String, EntradaVideos>()
 
     // Servidores de un episodio. Se guardan 10 minutos para que abrir el reproductor sea instantáneo.
+    fun enCache(marcador: ServerLink): List<ServerLink>? {
+        val clave = (marcador.headers["mod"] ?: "") + "|" + marcador.url
+        val c = cacheVideos[clave] ?: return null
+        return if (System.currentTimeMillis() - c.t < 10 * 60 * 1000) c.lista else null
+    }
+
     fun resolverVideos(marcador: ServerLink, prefs: SharedPreferences): List<ServerLink> {
         val clave = (marcador.headers["mod"] ?: "") + "|" + marcador.url
         val c = cacheVideos[clave]

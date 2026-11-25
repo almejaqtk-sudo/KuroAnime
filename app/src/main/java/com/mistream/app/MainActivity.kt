@@ -14,6 +14,7 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.AbsListView
 import android.widget.BaseAdapter
 import android.widget.EditText
 import android.widget.GridView
@@ -46,6 +47,15 @@ class MainActivity : Activity() {
     private var visibles: List<Item> = emptyList()
     private var versionCargada = -1
 
+    // Filtro de género que hace el propio sitio (trae todas las páginas, no solo lo ya cargado)
+    private var modulosCargados: List<Modulo> = emptyList()
+    private var generoSel: String? = null
+    private var itemsGenero: List<Item> = emptyList()
+    private var paginaGenero = 1
+    private var cargandoGenero = false
+    private var finGenero = false
+    private var tokenGenero = 0
+
     private fun dp(v: Int) = Ui.dp(this, v)
 
     private fun pesoLp(): LinearLayout.LayoutParams {
@@ -57,6 +67,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("mistream", MODE_PRIVATE)
+        Repositorio.asegurarIntegrado(prefs)
 
         val raiz = LinearLayout(this)
         raiz.orientation = LinearLayout.VERTICAL
@@ -185,9 +196,7 @@ class MainActivity : Activity() {
 
         // Acciones
         pModulo.setOnClickListener { dialogoModulo() }
-        pGenero.setOnClickListener {
-            dialogoFiltro("Género", todos.flatMap { it.generos }.distinct().sorted(), generosSel, pGenero)
-        }
+        pGenero.setOnClickListener { abrirGeneros() }
         pTipo.setOnClickListener {
             dialogoFiltro("Tipo", todos.map { it.tipo }.filter { it.isNotEmpty() }.distinct().sorted(), tiposSel, pTipo)
         }
@@ -206,6 +215,16 @@ class MainActivity : Activity() {
         grilla.setOnItemClickListener { _, _, pos, _ ->
             if (pos in visibles.indices) abrirDetalle(visibles[pos])
         }
+
+        // Al llegar al final de un género se piden más títulos
+        grilla.setOnScrollListener(object : AbsListView.OnScrollListener {
+            override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) {}
+            override fun onScroll(view: AbsListView?, first: Int, visible: Int, total: Int) {
+                if (pestana == 0 && generoSel != null && !cargandoGenero && !finGenero &&
+                    total > 0 && first + visible >= total - 3
+                ) cargarGenero(false)
+            }
+        })
 
         actualizar()
     }
@@ -260,6 +279,7 @@ class MainActivity : Activity() {
     }
 
     private fun aplicarResultado(r: Repositorio.Resultado) {
+        modulosCargados = r.modulos
         todos = r.modulos.flatMap { it.items }
         nombresModulos = r.modulos.map { it.nombre }.distinct()
         val sel = moduloSel
@@ -271,7 +291,9 @@ class MainActivity : Activity() {
     private fun pasaFiltros(item: Item): Boolean {
         val sel = moduloSel
         if (sel != null && item.modulo != sel) return false
-        if (generosSel.isNotEmpty() && item.generos.none { generosSel.contains(it) }) return false
+        if (generoSel == null && generosSel.isNotEmpty() &&
+            item.generos.none { generosSel.contains(it) }
+        ) return false
         if (tiposSel.isNotEmpty() && !tiposSel.contains(item.tipo)) return false
         if (estadosSel.isNotEmpty() && !estadosSel.contains(item.estado)) return false
         return true
@@ -283,8 +305,12 @@ class MainActivity : Activity() {
 
         when (pestana) {
             0 -> {
-                visibles = todos.filter { pasaFiltros(it) }
-                titulo.text = "Últimos episodios"
+                val g = generoSel
+                visibles = (if (g != null) itemsGenero else todos).filter { pasaFiltros(it) }
+                titulo.text = if (g != null) "Género: $g" else "Últimos episodios"
+                if (g != null && visibles.isEmpty() && !cargandoGenero) {
+                    titulo.text = "Sin resultados en $g"
+                }
             }
             1 -> {
                 visibles = if (q.isEmpty()) todos else todos.filter { it.titulo.lowercase().contains(q) }
@@ -319,9 +345,107 @@ class MainActivity : Activity() {
             .setItems(opciones.toTypedArray()) { _, i ->
                 moduloSel = if (i == 0) null else opciones[i]
                 pModulo.text = (moduloSel ?: "Todos") + " ▾"
-                actualizar()
+                // Cada módulo tiene sus propios géneros: se quita el filtro de género anterior
+                elegirGenero(null)
             }
             .show()
+    }
+
+    // Géneros disponibles (nombre -> módulos que lo tienen y su id en el sitio)
+    private fun destinosGeneros(): LinkedHashMap<String, MutableList<Pair<Modulo, String>>> {
+        val mapa = LinkedHashMap<String, MutableList<Pair<Modulo, String>>>()
+        for (m in modulosCargados) {
+            if (moduloSel != null && m.nombre != moduloSel) continue
+            if (m.fuente.isEmpty()) continue
+            for ((nombre, id) in m.generos) {
+                mapa.getOrPut(nombre) { mutableListOf() }.add(Pair(m, id))
+            }
+        }
+        return mapa
+    }
+
+    private fun abrirGeneros() {
+        val mapa = destinosGeneros()
+        if (mapa.isEmpty()) {
+            // Módulos sin lista de géneros: se usan los géneros de los títulos ya cargados
+            dialogoFiltro(
+                "Género",
+                todos.flatMap { it.generos }.distinct().sorted(),
+                generosSel,
+                pGenero
+            )
+            return
+        }
+        val nombres = mapa.keys.toList()
+        AlertDialog.Builder(this)
+            .setTitle("Género")
+            .setSingleChoiceItems(nombres.toTypedArray(), (generoSel?.let { nombres.indexOf(it) } ?: -1)) { d, which ->
+                d.dismiss()
+                elegirGenero(nombres[which])
+            }
+            .setNeutralButton("Limpiar") { _, _ -> elegirGenero(null) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun elegirGenero(nombre: String?) {
+        generoSel = nombre
+        tokenGenero++
+        itemsGenero = emptyList()
+        paginaGenero = 1
+        finGenero = false
+        cargandoGenero = false
+        generosSel.clear()
+        pGenero.text = if (nombre == null) "Género (0) ▾" else "Género (1) ▾"
+        if (nombre == null) {
+            actualizar()
+        } else {
+            cargarGenero(true)
+        }
+    }
+
+    private fun cargarGenero(primera: Boolean) {
+        val nombre = generoSel ?: return
+        if (cargandoGenero) return
+        val destinos = destinosGeneros()[nombre] ?: return
+        cargandoGenero = true
+        val token = tokenGenero
+        val pagina = paginaGenero
+        if (primera) {
+            actualizar()
+            titulo.text = "Cargando $nombre..."
+        }
+        Thread {
+            val nuevos = mutableListOf<Item>()
+            var error: String? = null
+            for ((modulo, id) in destinos) {
+                try {
+                    nuevos.addAll(MotorHub.catalogo(modulo.fuente, id, pagina))
+                } catch (e: Exception) {
+                    error = e.message ?: "error"
+                }
+            }
+            val mensaje = error
+            runOnUiThread {
+                if (token != tokenGenero) return@runOnUiThread
+                cargandoGenero = false
+                val existentes = itemsGenero.map { it.id + "|" + it.titulo }.toSet()
+                val unicos = nuevos.filter { (it.id + "|" + it.titulo) !in existentes }
+                if (unicos.isEmpty()) {
+                    finGenero = true
+                } else {
+                    itemsGenero = itemsGenero + unicos
+                    paginaGenero = pagina + 1
+                    Repositorio.agregarARegistro(unicos)
+                }
+                if (mensaje != null && itemsGenero.isEmpty()) {
+                    Toast.makeText(this, "No cargó el género: $mensaje", Toast.LENGTH_LONG).show()
+                }
+                val posicion = if (primera) 0 else grilla.firstVisiblePosition
+                actualizar()
+                if (!primera) grilla.setSelection(posicion)
+            }
+        }.start()
     }
 
     private fun dialogoFiltro(

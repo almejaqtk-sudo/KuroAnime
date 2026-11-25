@@ -12,6 +12,7 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -35,6 +36,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -66,6 +68,8 @@ class PlayerActivity : Activity() {
     private lateinit var bSiguiente: TextView
     private lateinit var bEscala: TextView
     private lateinit var bServidores: TextView
+    private lateinit var bRetro: TextView
+    private lateinit var bAdelante: TextView
     private var controlesVisibles = false
     private var barraWebVisible = false
     private val ocultadorBarra = Runnable {
@@ -176,6 +180,18 @@ class PlayerActivity : Activity() {
         lpBarra.gravity = Gravity.TOP or Gravity.END
         lpBarra.setMargins(0, dp(12), dp(16), 0)
         raiz.addView(barra, lpBarra)
+
+        // Retroceder / adelantar 10 segundos (a los lados del centro de la pantalla)
+        bRetro = botonSalto("↺ 10") { saltar(-10000) }
+        val lpRetro = FrameLayout.LayoutParams(dp(76), dp(76))
+        lpRetro.gravity = Gravity.CENTER_VERTICAL or Gravity.START
+        lpRetro.setMargins(dp(150), 0, 0, 0)
+        raiz.addView(bRetro, lpRetro)
+        bAdelante = botonSalto("10 ↻") { saltar(10000) }
+        val lpAdelante = FrameLayout.LayoutParams(dp(76), dp(76))
+        lpAdelante.gravity = Gravity.CENTER_VERTICAL or Gravity.END
+        lpAdelante.setMargins(0, 0, dp(150), 0)
+        raiz.addView(bAdelante, lpAdelante)
         setContentView(raiz)
 
         // Con video directo, los botones aparecen y desaparecen junto con los controles
@@ -187,7 +203,15 @@ class PlayerActivity : Activity() {
         )
         actualizarBarra()
 
-        val exo = ExoPlayer.Builder(this).build()
+        // Empieza a reproducir con muy poco búfer (arranca antes) y salta de 10 en 10 segundos
+        val carga = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(15000, 60000, 1000, 2000)
+            .build()
+        val exo = ExoPlayer.Builder(this)
+            .setLoadControl(carga)
+            .setSeekBackIncrementMs(10000)
+            .setSeekForwardIncrementMs(10000)
+            .build()
         player = exo
         vistaExo.player = exo
 
@@ -213,7 +237,7 @@ class PlayerActivity : Activity() {
 
             override fun onPlaybackStateChanged(estado: Int) {
                 if (estado == Player.STATE_ENDED) {
-                    prefs.edit().remove(clave()).apply()
+                    Progreso.marcarVisto(prefs, itemTitulo, episodios[indiceEp].titulo)
                     if (haySiguiente()) cargarEpisodio(indiceEp + 1)
                 }
             }
@@ -237,9 +261,48 @@ class PlayerActivity : Activity() {
         return t
     }
 
+    // Círculo oscuro con texto para los botones de ±10 segundos
+    private fun botonSalto(texto: String, accion: () -> Unit): TextView {
+        val t = TextView(this)
+        t.text = texto
+        t.setTextColor(Color.parseColor("#C7D2FE"))
+        t.textSize = 16f
+        t.setTypeface(null, Typeface.BOLD)
+        t.gravity = Gravity.CENTER
+        val c = GradientDrawable()
+        c.shape = GradientDrawable.OVAL
+        c.setColor(Color.parseColor("#B3181B2A"))
+        t.background = c
+        t.visibility = View.GONE
+        t.setOnClickListener { accion() }
+        return t
+    }
+
+    private fun saltar(ms: Long) {
+        if (modoWeb) {
+            // Servidores web: se manda la flecha izquierda/derecha al reproductor de la página.
+            // Depende de cada reproductor; en la mayoría de los casos mueve 10 segundos.
+            val tecla = if (ms < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
+            web?.let {
+                it.requestFocus()
+                it.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, tecla))
+                it.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, tecla))
+            }
+            mostrarBarraWeb()
+            return
+        }
+        val exo = player ?: return
+        val dur = exo.duration
+        var destino = exo.currentPosition + ms
+        if (destino < 0) destino = 0
+        if (dur > 0 && destino > dur - 1000) destino = dur - 1000
+        exo.seekTo(destino)
+        vistaExo.showController()
+    }
+
     private fun haySiguiente() = indiceEp < episodios.size - 1
 
-    private fun clave() = "pos_" + itemTitulo + "_" + episodios[indiceEp].titulo
+    private fun clave() = Progreso.clavePos(itemTitulo, episodios[indiceEp].titulo)
 
     private fun actualizarBarra() {
         if (!::barra.isInitialized) return
@@ -247,6 +310,9 @@ class PlayerActivity : Activity() {
         val v = if (mostrar) View.VISIBLE else View.GONE
         barra.visibility = v
         bAtras.visibility = v
+        val vSalto = if (mostrar && listaServidores.isNotEmpty()) View.VISIBLE else View.GONE
+        bRetro.visibility = vSalto
+        bAdelante.visibility = vSalto
         bAnterior.visibility = if (indiceEp > 0) View.VISIBLE else View.GONE
         bSiguiente.visibility = if (haySiguiente()) View.VISIBLE else View.GONE
         bServidores.visibility = if (listaServidores.size > 1) View.VISIBLE else View.GONE
@@ -322,6 +388,7 @@ class PlayerActivity : Activity() {
         listaServidores = emptyList()
         reproduciendo = false
         posInicial = prefs.getLong(clave(), 0L)
+        Progreso.guardarUltimo(prefs, itemTitulo, episodios[i].titulo)
         Toast.makeText(this, episodios[i].titulo, Toast.LENGTH_SHORT).show()
         if (servidores.isEmpty()) {
             Toast.makeText(this, "Sin servidores", Toast.LENGTH_LONG).show()
@@ -372,7 +439,12 @@ class PlayerActivity : Activity() {
                     // Si ya elegiste un servidor antes y este episodio lo tiene, se usa solo
                     val pref = prefs.getString("srv_pref", null)
                     val idx = lista.indexOfFirst { it.nombre == pref }
-                    if (idx >= 0) usarServidor(idx) else mostrarSelector()
+                    when {
+                        idx >= 0 -> usarServidor(idx)
+                        // Sin servidor elegido: se usa el primero que no sea web (carga más rápido)
+                        lista[0].tipo != "embed" && lista[0].tipo != "external" -> usarServidor(0)
+                        else -> mostrarSelector()
+                    }
                     prefetchSiguiente()
                 }
             } catch (e: Exception) {
@@ -517,6 +589,7 @@ class PlayerActivity : Activity() {
         fallosWeb = 0
         reproduciendo = true
         modoWeb = true
+        Progreso.marcarVisto(prefs, itemTitulo, episodios[indiceEp].titulo)
         vistaExo.visibility = View.GONE
         asegurarWeb().visibility = View.VISIBLE
         cargarWeb()
@@ -591,13 +664,12 @@ class PlayerActivity : Activity() {
 
     private fun guardarPosicion() {
         val exo = player ?: return
-        val pos = exo.currentPosition
-        val dur = exo.duration
-        if (pos > 5000 && (dur <= 0 || pos < dur - 10000)) {
-            prefs.edit().putLong(clave(), pos).apply()
-        } else {
-            prefs.edit().remove(clave()).apply()
-        }
+        // Sin nada cargado (por ejemplo, justo al cambiar de episodio) no se toca el progreso
+        if (modoWeb || exo.mediaItemCount == 0 || indiceEp !in episodios.indices) return
+        Progreso.actualizar(
+            prefs, itemTitulo, episodios[indiceEp].titulo,
+            exo.currentPosition, exo.duration
+        )
     }
 
     private fun motivo(e: PlaybackException): String {

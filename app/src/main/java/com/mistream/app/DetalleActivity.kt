@@ -23,39 +23,50 @@ import android.widget.Toast
 
 class DetalleActivity : Activity() {
 
-    private class Fila(val vista: View, val icono: TextView, val texto: TextView)
+    private class Fila(
+        val fondo: LinearLayout,
+        val vista: View,
+        val icono: TextView,
+        val texto: TextView,
+        val sub: TextView
+    )
 
     private lateinit var prefs: SharedPreferences
     private lateinit var lista: ListView
     private lateinit var tvEps: TextView
+    private lateinit var tvMeta: TextView
+    private lateinit var tvDesc: TextView
     private lateinit var botonOrden: TextView
-    private lateinit var botonFav: TextView
+    private lateinit var botonVer: TextView
+    private lateinit var botonLista: TextView
     private lateinit var adaptador: AdaptadorEpisodios
 
     private var titulo = ""
     private var portada = ""
+    private var descripcionActual = ""
+    private var metaActual = ""
     private var episodiosJson = "[]"
     private var episodios: List<Episodio> = emptyList()
-    private var indiceContinuar = 0
+    private var indiceAccion = 0
     private var descendente = true
 
     private val colorFila = Color.parseColor("#2B2840")
+    private val colorFilaVisto = Color.parseColor("#1D1A2B")
     private val colorResalte = Color.parseColor("#A5B4FC")
+    private val colorGris = Color.parseColor("#8A869C")
 
     private fun dp(v: Int) = Ui.dp(this, v)
 
-    private fun circulo(texto: String, accion: () -> Unit): TextView {
-        val t = TextView(this)
-        t.text = texto
-        t.setTextColor(Color.WHITE)
-        t.textSize = 22f
-        t.gravity = Gravity.CENTER
-        val g = GradientDrawable()
-        g.shape = GradientDrawable.OVAL
-        g.setColor(Color.parseColor("#99000000"))
-        t.background = g
-        t.setOnClickListener { accion() }
-        return t
+    // "Episodio 8 - Ver Nombre largo 8" -> "Episodio 8"
+    private fun nombreCorto(t: String): String =
+        t.replace(Regex("(?i)\\s*[-–]\\s*ver\\s.*$"), "").trim().ifEmpty { t }
+
+    private fun tiempo(ms: Long): String {
+        val s = ms / 1000
+        val h = s / 3600
+        val m = (s % 3600) / 60
+        val seg = s % 60
+        return if (h > 0) "%d:%02d:%02d".format(h, m, seg) else "%02d:%02d".format(m, seg)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -64,21 +75,42 @@ class DetalleActivity : Activity() {
 
         titulo = intent.getStringExtra("item") ?: ""
         portada = intent.getStringExtra("portada") ?: ""
-        val descripcion = intent.getStringExtra("descripcion") ?: ""
-        val meta = intent.getStringExtra("meta") ?: ""
+        descripcionActual = intent.getStringExtra("descripcion") ?: ""
+        metaActual = intent.getStringExtra("meta") ?: ""
         episodiosJson = intent.getStringExtra("episodios") ?: "[]"
         episodios = ModuloParser.episodiosDeJson(episodiosJson)
         descendente = prefs.getBoolean("eps_desc", true)
 
-        val raiz = FrameLayout(this)
+        val raiz = LinearLayout(this)
+        raiz.orientation = LinearLayout.VERTICAL
         raiz.setBackgroundColor(Ui.FONDO)
+
+        // Barra de arriba: solo el botón de volver
+        val barraSup = LinearLayout(this)
+        barraSup.orientation = LinearLayout.HORIZONTAL
+        barraSup.setPadding(dp(16), dp(10), dp(16), dp(2))
+        val atras = TextView(this)
+        atras.text = "←"
+        atras.setTextColor(Color.WHITE)
+        atras.textSize = 22f
+        atras.gravity = Gravity.CENTER
+        atras.background = Ui.fondo(this, colorFila, 22, Ui.BORDE)
+        atras.setOnClickListener { finish() }
+        barraSup.addView(atras, LinearLayout.LayoutParams(dp(44), dp(44)))
+        raiz.addView(
+            barraSup,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
 
         lista = ListView(this)
         lista.divider = null
         lista.dividerHeight = 0
         lista.setBackgroundColor(Ui.FONDO)
         lista.selector = ColorDrawable(Color.TRANSPARENT)
-        lista.addHeaderView(crearCabecera(descripcion, meta), null, false)
+        lista.addHeaderView(crearCabecera(), null, false)
         adaptador = AdaptadorEpisodios()
         lista.adapter = adaptador
         lista.setOnItemClickListener { _, _, pos, _ ->
@@ -87,20 +119,103 @@ class DetalleActivity : Activity() {
         }
         raiz.addView(
             lista,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         )
 
-        // Botones flotantes: volver (izquierda) y Mi lista (derecha)
-        val atras = circulo("←") { finish() }
-        val lpAtras = FrameLayout.LayoutParams(dp(44), dp(44))
-        lpAtras.gravity = Gravity.TOP or Gravity.START
-        lpAtras.setMargins(dp(16), dp(12), 0, 0)
-        raiz.addView(atras, lpAtras)
+        setContentView(raiz)
+        ponerTextos()
+        actualizarFav()
+        calcularAccion()
+        if (episodios.isEmpty()) cargarEpisodiosRemotos() else prefetch()
+    }
 
-        botonFav = circulo("♡") {
+    private fun crearCabecera(): View {
+        val cab = LinearLayout(this)
+        cab.orientation = LinearLayout.VERTICAL
+        cab.setPadding(dp(16), dp(8), dp(16), 0)
+
+        // Portada completa (sin recortar ni desenfocar) + título y descripción
+        val fila = LinearLayout(this)
+        fila.orientation = LinearLayout.HORIZONTAL
+
+        val img = ImageView(this)
+        img.scaleType = ImageView.ScaleType.CENTER_CROP
+        img.background = Ui.fondo(this, Ui.PILDORA, 16)
+        Ui.redondear(img, dp(16).toFloat())
+        fila.addView(img, LinearLayout.LayoutParams(dp(120), dp(180)))
+        ImageLoader.cargar(portada, img)
+
+        val textos = LinearLayout(this)
+        textos.orientation = LinearLayout.VERTICAL
+        textos.setPadding(dp(16), dp(4), 0, 0)
+
+        val tvTitulo = TextView(this)
+        tvTitulo.text = titulo
+        tvTitulo.setTextColor(Color.WHITE)
+        tvTitulo.textSize = 22f
+        tvTitulo.setTypeface(null, Typeface.BOLD)
+        tvTitulo.maxLines = 5
+        tvTitulo.ellipsize = TextUtils.TruncateAt.END
+        textos.addView(tvTitulo)
+
+        tvMeta = TextView(this)
+        tvMeta.setTextColor(Color.parseColor("#C7C9D9"))
+        tvMeta.textSize = 13f
+        tvMeta.setTypeface(null, Typeface.BOLD)
+        tvMeta.setPadding(0, dp(6), 0, 0)
+        textos.addView(tvMeta)
+
+        tvDesc = TextView(this)
+        tvDesc.setTextColor(Color.parseColor("#A9A5BD"))
+        tvDesc.textSize = 15f
+        tvDesc.maxLines = 4
+        tvDesc.ellipsize = TextUtils.TruncateAt.END
+        tvDesc.setPadding(0, dp(12), 0, 0)
+        tvDesc.setOnClickListener {
+            if (tvDesc.maxLines == 4) {
+                tvDesc.maxLines = Int.MAX_VALUE
+                tvDesc.ellipsize = null
+            } else {
+                tvDesc.maxLines = 4
+                tvDesc.ellipsize = TextUtils.TruncateAt.END
+            }
+        }
+        textos.addView(tvDesc)
+
+        fila.addView(
+            textos,
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        cab.addView(fila)
+
+        // Botones: Ver desde el principio / Reanudar  +  Mi lista
+        val botones = LinearLayout(this)
+        botones.orientation = LinearLayout.HORIZONTAL
+        botones.gravity = Gravity.CENTER_VERTICAL
+        botones.setPadding(0, dp(22), 0, 0)
+
+        botonVer = TextView(this)
+        botonVer.text = "▶ Ver desde el principio"
+        botonVer.setTextColor(Color.WHITE)
+        botonVer.textSize = 16f
+        botonVer.setTypeface(null, Typeface.BOLD)
+        botonVer.gravity = Gravity.CENTER
+        botonVer.maxLines = 1
+        botonVer.ellipsize = TextUtils.TruncateAt.END
+        botonVer.setPadding(dp(12), 0, dp(12), 0)
+        botonVer.background = Ui.fondo(this, Ui.ROSA, 27)
+        botonVer.setOnClickListener { reproducir(indiceAccion) }
+        botones.addView(botonVer, LinearLayout.LayoutParams(0, dp(54), 1f))
+
+        botonLista = TextView(this)
+        botonLista.text = "☆ Mi lista"
+        botonLista.setTextColor(Color.WHITE)
+        botonLista.textSize = 16f
+        botonLista.setTypeface(null, Typeface.BOLD)
+        botonLista.gravity = Gravity.CENTER
+        botonLista.setPadding(dp(20), 0, dp(20), 0)
+        botonLista.background = Ui.fondo(this, Ui.FONDO, 27, Ui.BORDE)
+        botonLista.setOnClickListener {
             val ahora = Favoritos.alternar(prefs, titulo)
             actualizarFav()
             Toast.makeText(
@@ -109,133 +224,19 @@ class DetalleActivity : Activity() {
                 Toast.LENGTH_SHORT
             ).show()
         }
-        val lpFav = FrameLayout.LayoutParams(dp(44), dp(44))
-        lpFav.gravity = Gravity.TOP or Gravity.END
-        lpFav.setMargins(0, dp(12), dp(16), 0)
-        raiz.addView(botonFav, lpFav)
-
-        setContentView(raiz)
-        actualizarFav()
-        calcularContinuar()
-        if (episodios.isEmpty()) cargarEpisodiosRemotos()
-    }
-
-    private fun crearCabecera(descripcion: String, meta: String): View {
-        val cab = LinearLayout(this)
-        cab.orientation = LinearLayout.VERTICAL
-        cab.clipChildren = false
-
-        // Fondo: la portada desenfocada
-        val banner = FrameLayout(this)
-        val fondoImg = ImageView(this)
-        fondoImg.scaleType = ImageView.ScaleType.CENTER_CROP
-        banner.addView(
-            fondoImg,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
+        val lpLista = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            dp(54)
         )
-        val velo = View(this)
-        velo.setBackgroundColor(Color.parseColor("#66000000"))
-        banner.addView(
-            velo,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        )
-        ImageLoader.cargarDesenfocada(portada, fondoImg)
-        cab.addView(
-            banner,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(220))
-        )
-
-        // Tarjeta con esquinas redondeadas que se monta sobre el fondo
-        val tarjeta = LinearLayout(this)
-        tarjeta.orientation = LinearLayout.VERTICAL
-        tarjeta.clipChildren = false
-        val r = dp(28).toFloat()
-        val g = GradientDrawable()
-        g.setColor(Ui.FONDO)
-        g.cornerRadii = floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f)
-        tarjeta.background = g
-        tarjeta.setPadding(dp(16), 0, dp(16), 0)
-        val lpTarjeta = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        )
-        lpTarjeta.topMargin = -dp(28)
-        cab.addView(tarjeta, lpTarjeta)
-
-        val fila = LinearLayout(this)
-        fila.orientation = LinearLayout.HORIZONTAL
-        fila.gravity = Gravity.CENTER_VERTICAL
-        fila.clipChildren = false
-
-        val img = ImageView(this)
-        img.scaleType = ImageView.ScaleType.CENTER_CROP
-        img.background = Ui.fondo(this, Ui.PILDORA, 14)
-        Ui.redondear(img, dp(14).toFloat())
-        val lpImg = LinearLayout.LayoutParams(dp(110), dp(165))
-        lpImg.topMargin = -dp(80)
-        fila.addView(img, lpImg)
-        ImageLoader.cargar(portada, img)
-
-        val textos = LinearLayout(this)
-        textos.orientation = LinearLayout.VERTICAL
-        textos.setPadding(dp(16), dp(8), 0, dp(8))
-
-        val tvTitulo = TextView(this)
-        tvTitulo.text = titulo
-        tvTitulo.setTextColor(Color.WHITE)
-        tvTitulo.textSize = 20f
-        tvTitulo.setTypeface(null, Typeface.BOLD)
-        tvTitulo.maxLines = 4
-        tvTitulo.ellipsize = TextUtils.TruncateAt.END
-        textos.addView(tvTitulo)
-
-        if (meta.isNotEmpty()) {
-            val tvMeta = TextView(this)
-            tvMeta.text = meta
-            tvMeta.setTextColor(Color.parseColor("#C7C9D9"))
-            tvMeta.textSize = 14f
-            tvMeta.setTypeface(null, Typeface.BOLD)
-            tvMeta.setPadding(0, dp(6), 0, 0)
-            textos.addView(tvMeta)
-        }
-        fila.addView(
-            textos,
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        )
-        tarjeta.addView(fila)
-
-        // Descripción (solo si existe; toca para ver completa)
-        if (descripcion.isNotEmpty()) {
-            val tvDesc = TextView(this)
-            tvDesc.text = descripcion
-            tvDesc.setTextColor(Color.parseColor("#B9B5CC"))
-            tvDesc.textSize = 14f
-            tvDesc.maxLines = 3
-            tvDesc.ellipsize = TextUtils.TruncateAt.END
-            tvDesc.setPadding(0, dp(12), 0, 0)
-            tvDesc.setOnClickListener {
-                if (tvDesc.maxLines == 3) {
-                    tvDesc.maxLines = Int.MAX_VALUE
-                    tvDesc.ellipsize = null
-                } else {
-                    tvDesc.maxLines = 3
-                    tvDesc.ellipsize = TextUtils.TruncateAt.END
-                }
-            }
-            tarjeta.addView(tvDesc)
-        }
+        lpLista.leftMargin = dp(10)
+        botones.addView(botonLista, lpLista)
+        cab.addView(botones)
 
         // Título de la sección + botón para invertir el orden
         val encabezado = LinearLayout(this)
         encabezado.orientation = LinearLayout.HORIZONTAL
         encabezado.gravity = Gravity.CENTER_VERTICAL
-        encabezado.setPadding(0, dp(20), 0, dp(8))
+        encabezado.setPadding(0, dp(24), 0, dp(8))
 
         tvEps = TextView(this)
         tvEps.text = "Episodios"
@@ -265,32 +266,60 @@ class DetalleActivity : Activity() {
             ).show()
         }
         encabezado.addView(botonOrden)
-        tarjeta.addView(encabezado)
+        cab.addView(encabezado)
 
         return cab
     }
 
-    private fun actualizarFav() {
-        if (!::botonFav.isInitialized) return
-        val fav = Favoritos.esFavorito(prefs, titulo)
-        botonFav.text = if (fav) "♥" else "♡"
-        botonFav.setTextColor(if (fav) Ui.ROSA else Color.WHITE)
+    private fun ponerTextos() {
+        tvMeta.text = metaActual
+        tvMeta.visibility = if (metaActual.isEmpty()) View.GONE else View.VISIBLE
+        tvDesc.text = if (descripcionActual.isEmpty()) "Sin descripción" else descripcionActual
     }
 
-    // El episodio resaltado es el último que empezaste a ver (o el primero)
-    private fun calcularContinuar() {
-        var ultimo = -1
-        for (i in episodios.indices) {
-            val clave = "pos_" + titulo + "_" + episodios[i].titulo
-            if (prefs.getLong(clave, 0L) > 0) ultimo = i
+    private fun actualizarFav() {
+        if (!::botonLista.isInitialized) return
+        val fav = Favoritos.esFavorito(prefs, titulo)
+        botonLista.text = if (fav) "★ En mi lista" else "☆ Mi lista"
+        botonLista.setTextColor(if (fav) Ui.ROSA else Color.WHITE)
+    }
+
+    // Decide qué hace el botón grande: ver desde el principio, reanudar o continuar con el siguiente
+    private fun calcularAccion() {
+        indiceAccion = 0
+        var texto = "▶ Ver desde el principio"
+        if (episodios.isNotEmpty()) {
+            val ult = Progreso.ultimo(prefs, titulo)
+            var idx = if (ult != null) episodios.indexOfFirst { it.titulo == ult } else -1
+            if (idx < 0) {
+                // Compatibilidad: el último episodio que tenga una posición guardada
+                for (i in episodios.indices) {
+                    if (Progreso.posicion(prefs, titulo, episodios[i].titulo) > 0) idx = i
+                }
+            }
+            if (idx >= 0) {
+                val ep = episodios[idx]
+                val pos = Progreso.posicion(prefs, titulo, ep.titulo)
+                val visto = Progreso.esVisto(prefs, titulo, ep.titulo)
+                if (pos > 0) {
+                    indiceAccion = idx
+                    texto = "▶ Reanudar " + nombreCorto(ep.titulo)
+                } else if (visto && idx + 1 < episodios.size) {
+                    indiceAccion = idx + 1
+                    texto = "▶ Continuar " + nombreCorto(episodios[idx + 1].titulo)
+                } else if (!visto) {
+                    indiceAccion = idx
+                    texto = "▶ Continuar " + nombreCorto(ep.titulo)
+                }
+            }
         }
-        indiceContinuar = if (ultimo >= 0) ultimo else 0
+        if (::botonVer.isInitialized) botonVer.text = texto
         if (::adaptador.isInitialized) adaptador.notifyDataSetChanged()
     }
 
     override fun onResume() {
         super.onResume()
-        calcularContinuar()
+        calcularAccion()
         actualizarFav()
     }
 
@@ -305,12 +334,21 @@ class DetalleActivity : Activity() {
         Thread {
             try {
                 val eps = Motores.episodios(item.fuente, item.id)
+                val extra = MotorHub.metaDe(item.fuente, item.id)
                 runOnUiThread {
                     episodios = eps
                     episodiosJson = ModuloParser.episodiosAJson(eps)
                     tvEps.text = if (eps.isEmpty()) "Sin episodios" else "Episodios"
+                    if (extra != null) {
+                        if (extra.first.isNotEmpty()) descripcionActual = extra.first
+                        if (extra.second.isNotEmpty()) {
+                            metaActual = listOf(metaActual, extra.second)
+                                .filter { it.isNotEmpty() }.joinToString(" · ")
+                        }
+                        ponerTextos()
+                    }
                     adaptador.reordenar()
-                    calcularContinuar()
+                    calcularAccion()
                     prefetch()
                 }
             } catch (e: Exception) {
@@ -328,7 +366,7 @@ class DetalleActivity : Activity() {
 
     // Pide los servidores del episodio que probablemente vas a ver, así al tocarlo ya están listos
     private fun prefetch() {
-        val s = episodios.getOrNull(indiceContinuar)?.servidores ?: return
+        val s = episodios.getOrNull(indiceAccion)?.servidores ?: return
         if (s.size == 1 && s[0].tipo == "hub") {
             Thread {
                 try {
@@ -346,44 +384,9 @@ class DetalleActivity : Activity() {
             return
         }
         val s = episodios[indice].servidores
-        when {
-            s.size == 1 && s[0].tipo == "hub" -> elegirServidorHub(indice, s[0])
-            s.size > 1 -> mostrarSelector(indice, s)
-            else -> abrirReproductor(indice)
-        }
-    }
-
-    // Módulos AnimeHub: busca los servidores y los muestra para elegir
-    private fun elegirServidorHub(indice: Int, marcador: ServerLink) {
-        var cancelado = false
-        val carga = AlertDialog.Builder(this)
-            .setMessage("Buscando servidores...")
-            .setOnCancelListener { cancelado = true }
-            .create()
-        carga.show()
-        Thread {
-            try {
-                val servidores = MotorHub.resolverVideos(marcador, prefs)
-                runOnUiThread {
-                    carga.dismiss()
-                    if (cancelado || isFinishing) return@runOnUiThread
-                    if (servidores.isEmpty()) {
-                        Toast.makeText(this, "Sin servidores", Toast.LENGTH_LONG).show()
-                    } else {
-                        mostrarSelector(indice, servidores)
-                    }
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    carga.dismiss()
-                    Toast.makeText(
-                        this,
-                        "No se pudieron cargar los servidores: " + (e.message ?: "error"),
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-        }.start()
+        // Los módulos AnimeHub se abren directo: el reproductor busca los servidores y usa
+        // el que elegiste la última vez (o el más rápido), sin pasar por un diálogo.
+        if (s.size > 1) mostrarSelector(indice, s) else abrirReproductor(indice)
     }
 
     private fun mostrarSelector(indice: Int, servidores: List<ServerLink>) {
@@ -444,29 +447,30 @@ class DetalleActivity : Activity() {
             fila.orientation = LinearLayout.HORIZONTAL
             fila.gravity = Gravity.CENTER_VERTICAL
             fila.setPadding(dp(14), dp(10), dp(14), dp(10))
-            fila.background = Ui.fondo(this@DetalleActivity, colorFila, 32)
 
             val icono = TextView(this@DetalleActivity)
-            icono.text = "▶"
-            icono.setTextColor(Color.parseColor("#B8BCC8"))
             icono.textSize = 15f
             icono.gravity = Gravity.CENTER
-            val circ = GradientDrawable()
-            circ.shape = GradientDrawable.OVAL
-            circ.setColor(Color.TRANSPARENT)
-            circ.setStroke(dp(2), Color.parseColor("#B8BCC8"))
-            icono.background = circ
             fila.addView(icono, LinearLayout.LayoutParams(dp(44), dp(44)))
 
+            val columna = LinearLayout(this@DetalleActivity)
+            columna.orientation = LinearLayout.VERTICAL
+            columna.setPadding(dp(16), 0, 0, 0)
+
             val texto = TextView(this@DetalleActivity)
-            texto.setTextColor(Color.WHITE)
             texto.textSize = 18f
             texto.setTypeface(null, Typeface.BOLD)
-            texto.maxLines = 2
+            texto.maxLines = 1
             texto.ellipsize = TextUtils.TruncateAt.END
-            texto.setPadding(dp(16), 0, 0, 0)
+            columna.addView(texto)
+
+            val sub = TextView(this@DetalleActivity)
+            sub.textSize = 13f
+            sub.maxLines = 1
+            columna.addView(sub)
+
             fila.addView(
-                texto,
+                columna,
                 LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             )
 
@@ -477,7 +481,7 @@ class DetalleActivity : Activity() {
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 )
             )
-            val f = Fila(envoltorio, icono, texto)
+            val f = Fila(fila, envoltorio, icono, texto, sub)
             envoltorio.tag = f
             return f
         }
@@ -485,8 +489,50 @@ class DetalleActivity : Activity() {
         override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
             val f = if (convertView == null) crearFila() else convertView.tag as Fila
             val real = orden[position]
-            f.texto.text = episodios[real].titulo
-            f.texto.setTextColor(if (real == indiceContinuar) colorResalte else Color.WHITE)
+            val ep = episodios[real]
+            val visto = Progreso.esVisto(prefs, titulo, ep.titulo)
+            val pos = Progreso.posicion(prefs, titulo, ep.titulo)
+
+            f.texto.text = nombreCorto(ep.titulo)
+
+            val circ = GradientDrawable()
+            circ.shape = GradientDrawable.OVAL
+
+            when {
+                // Visto: círculo rosa con ✓, fila apagada
+                visto -> {
+                    f.fondo.background = Ui.fondo(this@DetalleActivity, colorFilaVisto, 32)
+                    circ.setColor(Ui.ROSA)
+                    f.icono.text = "✓"
+                    f.icono.setTextColor(Color.WHITE)
+                    f.texto.setTextColor(colorGris)
+                    f.sub.text = "Visto"
+                    f.sub.setTextColor(Ui.ROSA)
+                    f.sub.visibility = View.VISIBLE
+                }
+                // A medias: muestra en qué minuto te quedaste
+                pos > 0 -> {
+                    f.fondo.background = Ui.fondo(this@DetalleActivity, colorFila, 32)
+                    circ.setColor(Color.TRANSPARENT)
+                    circ.setStroke(dp(2), Ui.ROSA)
+                    f.icono.text = "▶"
+                    f.icono.setTextColor(Ui.ROSA)
+                    f.texto.setTextColor(Color.WHITE)
+                    f.sub.text = "Continuar en " + tiempo(pos)
+                    f.sub.setTextColor(Ui.ROSA)
+                    f.sub.visibility = View.VISIBLE
+                }
+                else -> {
+                    f.fondo.background = Ui.fondo(this@DetalleActivity, colorFila, 32)
+                    circ.setColor(Color.TRANSPARENT)
+                    circ.setStroke(dp(2), Color.parseColor("#B8BCC8"))
+                    f.icono.text = "▶"
+                    f.icono.setTextColor(Color.parseColor("#B8BCC8"))
+                    f.texto.setTextColor(if (real == indiceAccion) colorResalte else Color.WHITE)
+                    f.sub.visibility = View.GONE
+                }
+            }
+            f.icono.background = circ
             return f.vista
         }
     }

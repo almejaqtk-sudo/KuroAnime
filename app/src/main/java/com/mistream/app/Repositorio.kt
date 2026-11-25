@@ -29,6 +29,38 @@ object Repositorio {
     fun buscarItem(titulo: String, portada: String): Item? =
         registro.firstOrNull { it.titulo == titulo && it.portada == portada }
 
+    // Títulos que llegaron después (por ejemplo, al filtrar por género): se pueden abrir igual
+    fun agregarARegistro(nuevos: List<Item>) {
+        registro = registro + nuevos
+    }
+
+    // ---- Módulo AnimeAV1 integrado en la app ----
+    private const val VERSION_INTEGRADO = 1
+    private const val MARCA_INTEGRADO = "// AnimeAV1 (módulo integrado en KuroAnime)"
+
+    // Instala (o actualiza) el módulo AnimeAV1 que viene dentro de la app y lo deja de primero.
+    // Los demás módulos de AnimeAV1 que ya tenías se desactivan (no se borran) para no ver todo repetido.
+    @Synchronized
+    fun asegurarIntegrado(prefs: SharedPreferences) {
+        if (prefs.getInt("integrado_av1", 0) >= VERSION_INTEGRADO) return
+        try {
+            val codigo = KuroApp.contexto.assets.open("animeav1.js")
+                .bufferedReader().use { it.readText() }
+            val lista = leerInstalados(prefs)
+            val previo = lista.firstOrNull { it.valor.startsWith(MARCA_INTEGRADO) }
+            val activo = previo?.activo ?: true
+            lista.removeAll { it.valor.startsWith(MARCA_INTEGRADO) }
+            for (m in lista) {
+                if (m.nombre.contains("animeav1", ignoreCase = true)) m.activo = false
+            }
+            lista.add(0, Instalado(nuevoId(), "AnimeAV1", "Anime", "codigo", codigo, activo))
+            guardarInstalados(prefs, lista)
+            prefs.edit().putInt("integrado_av1", VERSION_INTEGRADO).apply()
+        } catch (e: Exception) {
+            // si falla, se intentará la próxima vez que abras la app
+        }
+    }
+
     private fun nuevoId(): String = UUID.randomUUID().toString().take(8)
 
     private fun nombreDeUrl(u: String): String {
@@ -180,7 +212,15 @@ object Repositorio {
             for (m in r.modulos) {
                 val mo = JSONObject()
                 mo.put("nombre", m.nombre)
-                mo.put("fuente", m.items.firstOrNull()?.fuente ?: "")
+                mo.put("fuente", m.fuente.ifEmpty { m.items.firstOrNull()?.fuente ?: "" })
+                val gArr = JSONArray()
+                for ((gn, gi) in m.generos) {
+                    val go = JSONObject()
+                    go.put("n", gn)
+                    go.put("i", gi)
+                    gArr.put(go)
+                }
+                mo.put("generos", gArr)
                 val lista = JSONArray()
                 for (item in m.items) {
                     val o = JSONObject()
@@ -242,7 +282,15 @@ object Repositorio {
                         )
                     )
                 }
-                modulos.add(Modulo(mo.getString("nombre"), lista))
+                val generos = mutableListOf<Pair<String, String>>()
+                val gArr = mo.optJSONArray("generos")
+                if (gArr != null) {
+                    for (k in 0 until gArr.length()) {
+                        val go = gArr.optJSONObject(k) ?: continue
+                        generos.add(Pair(go.optString("n"), go.optString("i")))
+                    }
+                }
+                modulos.add(Modulo(mo.getString("nombre"), lista, fuente, generos))
             }
             if (modulos.isEmpty()) return null
             registro = modulos.flatMap { it.items }
