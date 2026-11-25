@@ -293,6 +293,7 @@ object MotorHub {
             val t = e.optString("title", "").trim()
             // Solo "Episodio N" (sin el nombre largo del anime)
             val titulo = when {
+                num == "0" && arr.length() == 1 -> "Película"
                 num.isNotEmpty() -> "Episodio $num"
                 t.isNotEmpty() -> t.replace(Regex("(?i)\\s*[-–]\\s*ver\\s.*$"), "").trim()
                 else -> "Episodio ${i + 1}"
@@ -355,6 +356,8 @@ object MotorHub {
             if (url.isEmpty() || !vistos.add(url.substringBefore("#"))) continue
             if (Regex("""\.(jpe?g|png|gif|webp|svg|ico|css|js)(\?|$)""", RegexOption.IGNORE_CASE)
                     .containsMatchIn(url)) continue
+            // Mega no carga en la app: se descarta
+            if (Servidores.esMega(url, v.optString("label", ""))) continue
 
             var tipo = v.optString("type", "").lowercase()
             // Los que se abren en el navegador ya no se usan: solo directos y web (embed)

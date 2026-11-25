@@ -256,7 +256,9 @@ object Servidores {
 
     private val marcasError = listOf(
         "file not found", "video not found", "file was deleted", "file is no longer available",
-        "has been removed", "has been deleted", "video no existe", "archivo no existe", "no encontrado"
+        "has been removed", "has been deleted", "video no existe", "archivo no existe", "no encontrado",
+        "no longer exists", "does not exist", "video unavailable", "video is unavailable",
+        "video not available", "no disponible", "ya no está disponible", "was removed", "file removed"
     )
 
     private fun abrir(url: String, headers: Map<String, String>, rango: String? = null): HttpURLConnection {
@@ -423,11 +425,30 @@ object Servidores {
         Estado.DUDOSO
     }
 
+    // Mega no abre en la app (necesita su propio visor): se descarta siempre
+    fun esMega(url: String, nombre: String = ""): Boolean =
+        Regex("""(^|[/.])mega\.(nz|io|co\.nz)([/:?#]|$)""", RegexOption.IGNORE_CASE).containsMatchIn(url) ||
+            nombre.trim().lowercase().let { it == "mega" || it.startsWith("mega ") || it.startsWith("mega·") }
+
+    // Orden de los servidores: primero Mp4upload, luego HLS, después el resto en el orden que venían
+    private fun prioridad(s: ServerLink): Int {
+        val n = s.nombre.lowercase()
+        val u = s.url.lowercase()
+        return when {
+            n.contains("mp4upload") || u.contains("mp4upload") -> 0
+            n.startsWith("hls") || u.contains("zilla-networks") || u.contains(".m3u8") || s.tipo == "hls" -> 1
+            n.contains("streamwish") || n.contains("upnshare") || n.contains("byse") -> 2
+            else -> 3
+        }
+    }
+
+    fun ordenar(lista: List<ServerLink>): List<ServerLink> = lista.sortedBy { prioridad(it) } // estable
+
     // Se queda solo con los servidores que sirven: sin los que se abren en el navegador, sin los caídos,
     // sin los que no son video y sin los de relleno (de unos 10 segundos). Si no se pudo comprobar
     // ninguno (sin conexión, por ejemplo), se devuelven los que quedaron "dudosos".
     fun filtrarFuncionales(lista: List<ServerLink>): List<ServerLink> {
-        val candidatos = lista.filter { it.tipo != "external" }
+        val candidatos = ordenar(lista.filter { it.tipo != "external" && !esMega(it.url, it.nombre) })
         if (candidatos.isEmpty()) return emptyList()
         val pool = Executors.newFixedThreadPool(minOf(candidatos.size, 8))
         try {
