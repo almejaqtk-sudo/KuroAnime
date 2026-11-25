@@ -5,7 +5,8 @@
 
     <application
         android:name=".KuroApp"
-        android:icon="@drawable/ic_kuro"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="KuroAnime"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
