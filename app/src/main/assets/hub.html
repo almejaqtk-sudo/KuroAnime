@@ -79,7 +79,7 @@
             tieneHome: typeof m.home === 'function',
             tieneSearch: typeof m.search === 'function',
             tieneGenres: typeof m.genres === 'function',
-            tieneFilters: typeof m.filters === 'function' || Array.isArray(m.filters),
+            tieneFilters: typeof m.filters === 'function' || Array.isArray(m.filters) || typeof m.getFilters === 'function',
             tieneLatest: typeof m.latest === 'function',
             icon: m.icon ? String(m.icon) : '',
             baseUrl: m.baseUrl ? String(m.baseUrl) : '',
@@ -88,8 +88,9 @@
         } else {
           var a = JSON.parse(argsJson || '[]');
           if (metodo === 'filters' && typeof m.filters !== 'function') {
-            // Algunos módulos declaran los filtros como una lista y no como función
-            out = Array.isArray(m.filters) ? m.filters : [];
+            // Los filtros pueden venir como función filters(), como función getFilters() o como una lista
+            if (typeof m.getFilters === 'function') out = await m.getFilters();
+            else out = Array.isArray(m.filters) ? m.filters : [];
           } else if (typeof m[metodo] !== 'function') {
             throw new Error('El módulo no define ' + metodo + '()');
           } else if (metodo === 'videos') {
