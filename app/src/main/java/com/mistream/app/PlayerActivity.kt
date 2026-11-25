@@ -429,6 +429,10 @@ class PlayerActivity : Activity() {
 
     private fun cargarEpisodio(i: Int) {
         if (i !in episodios.indices) return
+        // En servidores web no se puede medir el avance: al pasar al siguiente se da por visto el anterior
+        if (modoWeb && i == indiceEp + 1) {
+            Progreso.marcarVisto(prefs, itemTitulo, episodios[indiceEp].titulo)
+        }
         indiceEp = i
         detenerTodo()
         servidores = episodios[i].servidores
@@ -437,7 +441,6 @@ class PlayerActivity : Activity() {
         reproduciendo = false
         posInicial = prefs.getLong(clave(), 0L)
         Progreso.guardarUltimo(prefs, itemTitulo, episodios[i].titulo)
-        Toast.makeText(this, episodios[i].titulo, Toast.LENGTH_SHORT).show()
         if (servidores.isEmpty()) {
             Toast.makeText(this, "Sin servidores", Toast.LENGTH_LONG).show()
             actualizarBarra()
@@ -491,7 +494,6 @@ class PlayerActivity : Activity() {
 
     // Episodios de módulos AnimeHub: los servidores reales se piden al reproducir
     private fun resolverHub(marcador: ServerLink, i: Int) {
-        Toast.makeText(this, "Buscando servidores...", Toast.LENGTH_SHORT).show()
         Thread {
             try {
                 val lista = MotorHub.resolverVideos(marcador, prefs)
@@ -670,7 +672,6 @@ class PlayerActivity : Activity() {
         fallosWeb = 0
         reproduciendo = true
         modoWeb = true
-        Progreso.marcarVisto(prefs, itemTitulo, episodios[indiceEp].titulo)
         vistaExo.visibility = View.GONE
         asegurarWeb().visibility = View.VISIBLE
         cargarWeb()
@@ -679,7 +680,6 @@ class PlayerActivity : Activity() {
 
     private fun cargarWeb() {
         val srv = urlsWeb[indiceWeb]
-        Toast.makeText(this, "Servidor: " + srv.nombre, Toast.LENGTH_SHORT).show()
         val seguro = srv.url.replace("&", "&amp;").replace("\"", "&quot;")
         // Igual que AnimeHub: el reproductor va en un iframe dentro de una página propia
         val html = "<!DOCTYPE html><html><head>" +

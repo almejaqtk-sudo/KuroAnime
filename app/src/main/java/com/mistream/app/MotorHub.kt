@@ -247,7 +247,7 @@ object MotorHub {
 
         return when {
             filtros.isNotEmpty() && tieneSearch -> {
-                val r = try { porSearch() } catch (e: Exception) { if (tieneHome) emptyList() else throw e }
+                val r = try { porSearch() } catch (e: Exception) { if (tieneHome) emptyList<Item>() else throw e }
                 if (r.isEmpty() && tieneHome) porHome() else r
             }
             tieneHome -> porHome()

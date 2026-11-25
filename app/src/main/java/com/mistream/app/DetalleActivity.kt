@@ -315,7 +315,8 @@ class DetalleActivity : Activity() {
                     texto = "▶ Continuar " + nombreCorto(episodios[idx + 1].titulo)
                 } else if (!visto) {
                     indiceAccion = idx
-                    texto = "▶ Continuar " + nombreCorto(ep.titulo)
+                    // Lo abriste y no lo terminaste: se vuelve a ese mismo episodio
+                    texto = "▶ Reanudar " + nombreCorto(ep.titulo)
                 }
             }
         }
