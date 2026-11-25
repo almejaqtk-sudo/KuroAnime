@@ -1,245 +1,818 @@
-// AnimeAV1 (módulo integrado en KuroAnime) - versión 1
-// Formato AnimeHub: home / search / genres / details / videos
-const BASE = 'https://animeav1.com';
-const H = { 'Accept-Language': 'es-ES,es;q=0.9' };
+// AnimeAV1 (módulo integrado en KuroAnime) - versión 3 (módulo completo: filtros, últimos episodios, horario)
+const BASE_URL = 'https://animeav1.com';
 
-// Respaldo: se usa solo si la página no deja leer sus filtros. Lo normal es leerlos del propio sitio.
-const GENEROS_BASE = [
-  ['Acción', 'accion'], ['Aventuras', 'aventuras'], ['Ciencia Ficción', 'ciencia-ficcion'],
-  ['Comedia', 'comedia'], ['Deportes', 'deportes'], ['Drama', 'drama'], ['Ecchi', 'ecchi'],
-  ['Escolares', 'escolares'], ['Fantasía', 'fantasia'], ['Gore', 'gore'], ['Harem', 'harem'],
-  ['Histórico', 'historico'], ['Isekai', 'isekai'], ['Magia', 'magia'], ['Mecha', 'mecha'],
-  ['Militar', 'militar'], ['Misterio', 'misterio'], ['Música', 'musica'], ['Psicológico', 'psicologico'],
-  ['Romance', 'romance'], ['Seinen', 'seinen'], ['Shoujo', 'shoujo'], ['Shounen', 'shounen'],
-  ['Sobrenatural', 'sobrenatural'], ['Superpoderes', 'superpoderes'], ['Suspenso', 'suspenso'],
-  ['Terror', 'terror'], ['Vampiros', 'vampiros']
-].map((g) => ({ name: g[0], id: g[1] }));
+/* ---------- FILTROS (los mismos que tiene la web en /catalogo) ---------- */
+// Parámetro de URL que usa la web para cada filtro: /catalogo?genre=accion&status=emision&category=tv-anime&page=2
+const FILTER_PARAM = { genre: 'genre', type: 'category', status: 'status' };
 
-const NOMBRES_FILTRO = {
-  genre: 'Género', category: 'Tipo', type: 'Tipo', year: 'Año', status: 'Estado',
-  order: 'Ordenar por', sort: 'Ordenar por'
-};
-// Parámetros que no son filtros de verdad
-const NO_FILTRO = { search: 1, q: 1, query: 1, page: 1, letter: 1, letra: 1 };
+const slugify = (s) =>
+  s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[()]/g, '').trim().replace(/\s+/g, '-');
 
-const limpiar = (t) => String(t || '').replace(/\s+/g, ' ').trim();
-const ruta = (href) => String(href || '').replace(/^https?:\/\/[^\/]+/, '').split('#')[0].split('?')[0];
+// Géneros tal como los muestra la web. El valor (v) es el "slug" de la URL.
+// Si algún género no devuelve resultados, corrige aquí su slug: { v: 'slug-real', t: 'Nombre' }
+const GENRE_NAMES = [
+  'Acción', 'Antropomórfico', 'Artes Marciales', 'Aventura', 'Carreras', 'Ciencia Ficción', 'Comedia',
+  'Deportes', 'Detectives', 'Drama', 'Elenco adulto', 'Escolares', 'Espacial', 'Fantasía', 'Gastronomía',
+  'Gore', 'Harem', 'Histórico', 'Idols (Hombre)', 'Idols (Mujer)', 'Isekai', 'Josei', 'Juegos',
+  'Mahou Shoujo', 'Mecha', 'Militar', 'Misterio', 'Mitología', 'Música', 'Parodia', 'Psicológico',
+  'Recuentos de la vida', 'Romance', 'Samurai', 'Seinen', 'Shoujo', 'Shounen', 'Sobrenatural',
+  'Superpoderes', 'Suspenso', 'Terror', 'Vampiros', 'Yaoi', 'Yuri'
+];
 
-function parseLista(doc) {
-  const orden = [];
-  const mapa = {};
-  doc.querySelectorAll('a[href*="/media/"]').forEach((a) => {
-    const m = ruta(a.getAttribute('href')).match(/^\/media\/([^\/]+)\/?$/);
-    if (!m) return; // los enlaces de episodio (/media/slug/3) no se cuentan
-    const slug = m[1];
-    const cont = a.closest('article') || a.parentElement || a;
-    let it = mapa[slug];
-    if (!it) {
-      it = { title: '', cover: '', url: slug, sub: '' };
-      mapa[slug] = it;
-      orden.push(it);
+const FILTERS = [
+  { id: 'genre', label: 'Género', multi: false, options: GENRE_NAMES.map((n) => ({ v: slugify(n), t: n })) },
+  {
+    id: 'type', label: 'Tipo', multi: false,
+    options: [
+      { v: 'tv-anime', t: 'TV Anime' }, { v: 'pelicula', t: 'Película' }, { v: 'ova', t: 'OVA' },
+      { v: 'ona', t: 'ONA' }, { v: 'especial', t: 'Especial' }
+    ]
+  },
+  {
+    id: 'status', label: 'Estado', multi: false,
+    options: [
+      { v: 'emision', t: 'En emisión' }, { v: 'finalizado', t: 'Finalizado' }, { v: 'proximamente', t: 'Próximamente' }
+    ]
+  }
+];
+
+const isStaticAsset = (u) => /\.(js|css|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|map)(\?|$)/i.test(String(u || ''));
+
+const isNotFound = (e) => !!e && (e.status === 404 || /\b404\b/.test(String(e.message || '')));
+
+/* ---------- SERVIDORES ---------- */
+const FAST_SERVERS = [
+  { priority: 0, name: 'HLS', match: /zilla-networks/i, type: 'embed' },
+  { priority: 1, name: 'Streamwish', match: /(streamwish|wish|hglink|swiftplayers|alions|filelions|vidhide)/i, type: 'embed' },
+  { priority: 2, name: 'Mp4upload', match: /mp4upload/i, type: 'embed' },
+  { priority: 3, name: 'Okru', match: /(ok\.ru|od\.sdk|okcdn)/i, type: 'embed' },
+  { priority: 4, name: 'YourUpload', match: /yourupload/i, type: 'embed' },
+  { priority: 5, name: 'Filemoon', match: /(filemoon|moonplayer|kerapoxy)/i, type: 'embed' },
+  { priority: 6, name: 'Streamtape', match: /(streamtape|strtape|strcloud)/i, type: 'embed' },
+  { priority: 7, name: 'Doodstream', match: /(dood|ds2play|d0000d|do7go)/i, type: 'embed' },
+  { priority: 8, name: 'Mega', match: /mega\.nz/i, type: 'embed' }
+];
+
+const BLOCKED_SERVERS = [
+  /(fembed|feurl|fe\.|ncdn|streamango|openload|rapidvideo|verystream|clipwatching|jetload|mixdrop|upstream|voe|uqload|sbplay|sbembed|streamsb|embedrise|animeav1\.com\/(assets|static|img|js|css))/i
+];
+
+function classifyFastServer(rawUrl) {
+  const url = String(rawUrl || '').trim();
+  if (!url || !/^https?:\/\//i.test(url)) return null;
+
+  for (const blocked of BLOCKED_SERVERS) {
+    if (blocked.test(url)) return null;
+  }
+
+  for (const srv of FAST_SERVERS) {
+    if (srv.match.test(url)) {
+      return {
+        priority: srv.priority,
+        label: srv.name,
+        url,
+        type: srv.type
+      };
     }
-    if (!it.title) {
-      const h = cont.querySelector('h2,h3');
-      it.title = limpiar(h ? h.textContent : '') || limpiar(a.textContent).replace(/^Ver\s+/i, '');
-    }
-    if (!it.cover) {
-      const img = cont.querySelector('img[src*="/covers/"]') || cont.querySelector('img');
-      if (img) it.cover = api.abs(img.getAttribute('src') || '', BASE);
-    }
-    if (!it.sub) {
-      const t = (cont.textContent || '').match(/(TV Anime|ONA|OVA|Película|Pelicula|Especial|Movie)/i);
-      if (t) it.sub = t[1];
-    }
-  });
-  return orden.filter((x) => x.title);
+  }
+
+  if (/\.m3u8(\?|$)/i.test(url)) {
+    return { priority: 0, label: 'HLS Rápido', url, type: 'hls' };
+  }
+
+  if (/\.mp4(\?|$)/i.test(url) && !/(thumb|poster|preview|cover|ads|promo|sample)/i.test(url)) {
+    return { priority: 1, label: 'MP4 Rápido', url, type: 'mp4' };
+  }
+
+  return null;
 }
 
-// Convierte los filtros elegidos en la app ({ genre: 'accion', status: 'emision' }) en parámetros de la URL
-function paramsFiltros(filters) {
-  const q = [];
-  Object.keys(filters || {}).forEach((k) => {
-    if (filters[k] !== undefined && filters[k] !== null && filters[k] !== '') {
-      q.push(encodeURIComponent(k) + '=' + encodeURIComponent(filters[k]));
+
+// Texto de contexto (atributos, clases y texto corto del elemento y sus padres) para que la app detecte "sub" / "latino" / "español"
+function ctxLang(el) {
+  let t = '';
+  let n = el;
+  for (let i = 0; i < 4 && n && n.getAttribute; i++) {
+    t += ' ' + ['data-lang', 'data-audio', 'data-language', 'data-idioma', 'aria-label', 'title']
+      .map((a) => n.getAttribute(a) || '').join(' ');
+    if (i < 2) {
+      const own = (n.textContent || '').replace(/\s+/g, ' ').trim();
+      if (own.length <= 40) t += ' ' + own;
     }
-  });
-  return q;
+    n = n.parentElement;
+  }
+  return t;
 }
 
-const normal = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+function pickText(doc, selectors) {
+  for (const sel of selectors) {
+    const el = doc.querySelector(sel);
+    if (el && el.textContent && el.textContent.trim()) {
+      return el.textContent.trim();
+    }
+  }
+  return '';
+}
+
+function pickAttr(doc, selectors, attr) {
+  for (const sel of selectors) {
+    const el = doc.querySelector(sel);
+    const val = el ? el.getAttribute(attr) : '';
+    if (val && val.trim()) {
+      return val.trim();
+    }
+  }
+  return '';
+}
+
+// Portada real: prueba los atributos "lazy" antes que src y descarta marcadores de posición
+function imgUrl(img, baseUrl) {
+  if (!img) return '';
+  const bad = (u) => !u || /^data:/i.test(u) || /(placeholder|blank|loading|lazy\.|noimage|default)/i.test(u);
+  const fromSet = (v) => String(v || '').trim().split(/\s+/)[0];
+  const cand = ['data-src', 'data-lazy-src', 'data-original', 'data-lazy', 'data-thumb', 'data-poster']
+    .map((a) => img.getAttribute(a) || '')
+    .concat([fromSet(img.getAttribute('data-srcset')), img.getAttribute('src') || '', fromSet(img.getAttribute('srcset'))]);
+  const raw = cand.find((u) => !bad(u)) || '';
+  return raw ? api.abs(raw, baseUrl) : '';
+}
+
+function parseCardList(doc, baseUrl) {
+  const cardSelectors = [
+    'article',
+    '.anime-card',
+    '.grid a[href*="/anime/"]',
+    'a[href*="/anime/"]'
+  ];
+
+  let cards = [];
+  for (const sel of cardSelectors) {
+    const found = Array.from(doc.querySelectorAll(sel));
+    if (found.length > 0) {
+      cards = found;
+      break;
+    }
+  }
+
+  const seen = new Set();
+  const items = [];
+
+  for (const card of cards) {
+    const link = card.matches('a') ? card : card.querySelector('a[href*="/anime/"]') || card.querySelector('a');
+    const href = link ? link.getAttribute('href') || '' : '';
+    if (!href || href === '#' || href.startsWith('javascript:')) continue;
+
+    const absUrl = api.abs(href, baseUrl);
+    if (seen.has(absUrl)) continue;
+    seen.add(absUrl);
+
+    const img = card.querySelector('img');
+    const cover = imgUrl(img, baseUrl);
+
+    const title = (
+      card.querySelector('h2, h3, h4, .title, .anime-title')?.textContent ||
+      img?.getAttribute('alt') ||
+      link?.getAttribute('title') ||
+      link?.textContent ||
+      ''
+    ).trim();
+
+    if (!title) continue;
+
+    const sub = (
+      card.querySelector('.type, .badge, .meta, .sub, span')?.textContent || ''
+    ).trim();
+
+    items.push({
+      title,
+      cover,
+      url: absUrl,
+      sub: sub && sub !== title ? sub : undefined
+    });
+  }
+
+  return items;
+}
+
+function extractEpisodes(doc, htmlText, animeUrl) {
+  const episodes = [];
+  const seenUrls = new Set();
+  const seenNumbers = new Set();
+
+  const animeSlug = animeUrl
+    .replace(/^https?:\/\/[^/]+/i, '')
+    .replace(/\/+$/, '')
+    .split('/')
+    .pop() || '';
+
+  const addEpisode = (number, title, epUrl) => {
+    const num = Number(number);
+    if (!Number.isFinite(num) || num <= 0) return;
+    const cleanUrl = epUrl ? api.abs(epUrl, animeUrl) : `${animeUrl.replace(/\/+$/, '')}/episodio-${num}`;
+    if (seenUrls.has(cleanUrl) && seenNumbers.has(num)) return;
+    seenUrls.add(cleanUrl);
+    seenNumbers.add(num);
+    episodes.push({
+      number: num,
+      title: (title || `Episodio ${num}`).trim(),
+      url: cleanUrl
+    });
+  };
+
+  const allLinks = Array.from(doc.querySelectorAll('a[href]'));
+  for (const a of allLinks) {
+    const href = (a.getAttribute('href') || '').trim();
+    if (!href || href === '#' || href.startsWith('javascript:')) continue;
+
+    const text = (a.textContent || '').replace(/\s+/g, ' ').trim();
+    const looksLikeEp =
+      /\/(episodio|ep|ver|watch|capitulo|cap)[\/-]/i.test(href) ||
+      /-(episodio|ep|capitulo|cap)-\d+/i.test(href) ||
+      (animeSlug && href.includes(animeSlug) && /\/\d+\/?$/.test(href)) ||
+      /^(episodio|ep\.?|cap\.?|capítulo)\s*\d+/i.test(text);
+
+    if (!looksLikeEp) continue;
+
+    const numMatch =
+      href.match(/(?:episodio|ep|capitulo|cap)[-_\/](\d+(?:\.\d+)?)/i) ||
+      href.match(/\/(\d+(?:\.\d+)?)\/?$/) ||
+      text.match(/(?:episodio|ep\.?|cap\.?|capítulo)\s*(\d+(?:\.\d+)?)/i) ||
+      text.match(/\b(\d+(?:\.\d+)?)\b/);
+
+    if (numMatch) {
+      addEpisode(
+        numMatch[1],
+        text || `Episodio ${numMatch[1]}`,
+        href
+      );
+    }
+  }
+
+  const dataEls = Array.from(
+    doc.querySelectorAll('[data-episode], [data-ep], [data-href], [data-url]')
+  );
+  for (const el of dataEls) {
+    const epAttr = el.getAttribute('data-episode') || el.getAttribute('data-ep') || '';
+    const hrefAttr = el.getAttribute('data-href') || el.getAttribute('data-url') || '';
+    const txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
+
+    const numMatch =
+      epAttr.match(/(\d+(?:\.\d+)?)/) ||
+      hrefAttr.match(/(?:episodio|ep|cap)[-_\/](\d+(?:\.\d+)?)/i) ||
+      txt.match(/(?:episodio|ep\.?|cap\.?)\s*(\d+(?:\.\d+)?)/i);
+
+    if (numMatch) {
+      addEpisode(
+        numMatch[1],
+        txt || `Episodio ${numMatch[1]}`,
+        hrefAttr || undefined
+      );
+    }
+  }
+
+  if (episodes.length === 0 && htmlText) {
+    const cleanHtml = htmlText.replace(/\\\//g, '/');
+    const urlMatches = cleanHtml.match(/https?:\/\/[^\s"'<>]+\/(?:episodio|ep|ver|watch)[\/-][^\s"'<>]+/gi) || [];
+    for (const u of urlMatches) {
+      const m = u.match(/(?:episodio|ep|ver|watch)[-_\/](\d+(?:\.\d+)?)/i);
+      if (m) {
+        addEpisode(m[1], `Episodio ${m[1]}`, u);
+      }
+    }
+  }
+
+  if (episodes.length === 0) {
+    const bodyText = doc.body ? doc.body.textContent || '' : '';
+    const countMatch = bodyText.match(/(?:episodios?|capítulos?|capitulos?)\s*[:\-]?\s*(\d{1,4})\b/i);
+    if (countMatch) {
+      const total = Number(countMatch[1]);
+      if (total > 0 && total <= 200) {
+        for (let i = 1; i <= total; i++) {
+          addEpisode(i, `Episodio ${i}`, `${animeUrl.replace(/\/+$/, '')}/episodio-${i}`);
+        }
+      }
+    }
+  }
+
+  episodes.sort((a, b) => a.number - b.number);
+  return episodes;
+}
+
+/* ---------- HORARIO SEMANAL (/horario) ---------- */
+const WEEK = ['lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado', 'domingo'];
+const WEEK_LABEL = { lunes: 'Lunes', martes: 'Martes', miercoles: 'Miércoles', jueves: 'Jueves', viernes: 'Viernes', sabado: 'Sábado', domingo: 'Domingo' };
+
+function dayOf(text) {
+  const n = String(text || '').replace(/\s+/g, ' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  if (!n || n.length > 20) return '';
+  const m = n.match(/^(lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/);
+  return m ? m[1] : '';
+}
+
+function scheduleCard(a, baseUrl) {
+  let u;
+  try { u = new URL(api.abs(a.getAttribute('href') || '', baseUrl)); } catch (_) { return null; }
+  if (!/^\/media\/[^/]+\/?$/.test(u.pathname)) return null; // solo fichas de anime, no episodios
+  const box = a.closest('article, li') || a;
+  const img = a.querySelector('img') || box.querySelector('img');
+  const title = (
+    a.querySelector('h2, h3, h4, .title')?.textContent ||
+    box.querySelector('h2, h3, h4, .title')?.textContent ||
+    img?.getAttribute('alt') ||
+    a.getAttribute('title') ||
+    a.textContent ||
+    ''
+  ).replace(/\s+/g, ' ').trim();
+  if (!title) return null;
+  const raw = img ? img.getAttribute('data-src') || img.getAttribute('src') || '' : '';
+  return { title, cover: raw && !/^data:/i.test(raw) ? api.abs(raw, baseUrl) : '', url: u.href };
+}
+
+function parseSchedule(doc, baseUrl) {
+  const byDay = {};
+  const push = (day, item) => {
+    if (!day || !item) return;
+    const list = (byDay[day] = byDay[day] || []);
+    if (!list.some((x) => x.url === item.url)) list.push(item);
+  };
+  const result = () =>
+    WEEK.filter((d) => byDay[d] && byDay[d].length).map((d) => ({ day: WEEK_LABEL[d], items: byDay[d] }));
+
+  // A) pestañas que apuntan a su panel (aria-controls, href="#id" o data-target)
+  doc.querySelectorAll('[role="tab"], [data-day], [data-tab], a[href^="#"], button').forEach((tab) => {
+    const day = dayOf(tab.textContent);
+    if (!day) return;
+    const id = (tab.getAttribute('aria-controls') || tab.getAttribute('data-target') || tab.getAttribute('href') || '').replace(/^#/, '');
+    const panel = id ? doc.getElementById(id) : null;
+    if (panel) panel.querySelectorAll('a[href*="/media/"]').forEach((a) => push(day, scheduleCard(a, baseUrl)));
+  });
+  if (Object.keys(byDay).length >= 2) return result();
+
+  // B) encabezados de día seguidos de sus tarjetas, en orden de documento
+  Object.keys(byDay).forEach((k) => delete byDay[k]);
+  let current = '';
+  doc.body.querySelectorAll('*').forEach((el) => {
+    if (el.children.length === 0) {
+      const d = dayOf(el.textContent);
+      if (d) { current = d; return; }
+    }
+    if (current && el.matches('a[href*="/media/"]')) push(current, scheduleCard(el, baseUrl));
+  });
+  if (Object.keys(byDay).length >= 2) return result();
+
+  // C) un contenedor con 7 paneles (lunes → domingo)
+  Object.keys(byDay).forEach((k) => delete byDay[k]);
+  for (const el of Array.from(doc.body.querySelectorAll('*'))) {
+    if (el.children.length !== 7) continue;
+    const kids = Array.from(el.children);
+    if (kids.filter((k) => k.querySelector('a[href*="/media/"]')).length < 4) continue;
+    kids.forEach((k, i) => k.querySelectorAll('a[href*="/media/"]').forEach((a) => push(WEEK[i], scheduleCard(a, baseUrl))));
+    break;
+  }
+  return result();
+}
+
+/* ---------- HORARIO: lectura de JSON y descubrimiento de la API ---------- */
+const JS_DAYS = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
+
+// Decodifica el formato "devalue" que usa SvelteKit en /__data.json
+function devalueDecode(arr) {
+  const memo = new Map();
+  const rev = (i) => {
+    if (i === -1) return undefined;
+    if (i === -2) return NaN;
+    if (i === -3) return Infinity;
+    if (i === -4) return -Infinity;
+    if (i === -5) return -0;
+    if (memo.has(i)) return memo.get(i);
+    const v = arr[i];
+    if (v === null || typeof v !== 'object') { memo.set(i, v); return v; }
+    if (Array.isArray(v)) {
+      if (typeof v[0] === 'string') {
+        if (v[0] === 'Date') { memo.set(i, v[1]); return v[1]; }
+        if (v[0] === 'BigInt') { const n = Number(v[1]); memo.set(i, n); return n; }
+        if (v[0] === 'Set') { const s = []; memo.set(i, s); v.slice(1).forEach((x) => s.push(rev(x))); return s; }
+        if (v[0] === 'Map' || v[0] === 'RegExp' || v[0] === 'Object') { memo.set(i, null); return null; }
+      }
+      const out = [];
+      memo.set(i, out);
+      v.forEach((x) => out.push(rev(x)));
+      return out;
+    }
+    const obj = {};
+    memo.set(i, obj);
+    Object.keys(v).forEach((k) => { obj[k] = rev(v[k]); });
+    return obj;
+  };
+  return arr.length ? rev(0) : null;
+}
+
+function findAnime(o, depth = 0) {
+  if (!o || typeof o !== 'object' || Array.isArray(o) || depth > 2) return null;
+  const slug = typeof o.slug === 'string' ? o.slug : '';
+  const urlStr = typeof o.url === 'string' ? o.url : '';
+  const title = [o.title, o.name, o.titulo].find((x) => typeof x === 'string' && x.trim());
+  if ((slug || urlStr) && title) return o;
+  for (const v of Object.values(o)) {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const f = findAnime(v, depth + 1);
+      if (f) return f;
+    }
+  }
+  return null;
+}
+
+function animeItem(o, baseUrl) {
+  const a = findAnime(o);
+  if (!a) return null;
+  const title = [a.title, a.name, a.titulo].find((x) => typeof x === 'string' && x.trim()).trim();
+  const slug = typeof a.slug === 'string' ? a.slug : '';
+  const url = slug ? api.abs('/media/' + slug, baseUrl) : api.abs(a.url, baseUrl);
+  let cover = '';
+  for (const k of ['cover', 'poster', 'image', 'imagen', 'thumbnail', 'portada']) {
+    if (typeof a[k] === 'string' && a[k]) { cover = a[k]; break; }
+  }
+  if (!cover && /^\d+$/.test(String(a.id == null ? '' : a.id))) cover = 'https://cdn.animeav1.com/covers/' + a.id + '.jpg';
+  return { title, cover: cover ? api.abs(cover, baseUrl) : '', url };
+}
+
+// Busca en un JSON los animes agrupados por día (claves "lunes"… o campos de día/fecha)
+function scheduleFromJson(root, baseUrl) {
+  const byDay = {};
+  const push = (day, item) => {
+    if (!day || !item) return;
+    const list = (byDay[day] = byDay[day] || []);
+    if (!list.some((x) => x.url === item.url)) list.push(item);
+  };
+  const finish = () =>
+    WEEK.filter((d) => byDay[d] && byDay[d].length).map((d) => ({ day: WEEK_LABEL[d], items: byDay[d] }));
+
+  // 1) objeto con claves de día: { lunes: [...], martes: [...] }
+  const keyed = (node, depth) => {
+    if (!node || typeof node !== 'object' || depth > 5) return false;
+    if (!Array.isArray(node)) {
+      const dayKeys = Object.keys(node).filter((k) => dayOf(k));
+      if (dayKeys.length >= 2) {
+        dayKeys.forEach((k) => {
+          const v = node[k];
+          (Array.isArray(v) ? v : Object.values(v || {})).forEach((e) => push(dayOf(k), animeItem(e, baseUrl)));
+        });
+        return true;
+      }
+    }
+    return Object.values(node).some((v) => keyed(v, depth + 1));
+  };
+  if (keyed(root, 0)) {
+    const r = finish();
+    if (r.length >= 2) return r;
+    Object.keys(byDay).forEach((k) => delete byDay[k]);
+  }
+
+  // 2) entradas con un campo de día u hora de emisión
+  const entries = [];
+  const walk = (node, depth) => {
+    if (!node || typeof node !== 'object' || depth > 7) return;
+    if (Array.isArray(node)) { node.forEach((n) => walk(n, depth + 1)); return; }
+    for (const [k, v] of Object.entries(node)) {
+      if (/day|dia|dow|broadcast|airing|aired|emisi|estreno|schedule|horario/i.test(k) && (typeof v === 'string' || typeof v === 'number')) {
+        entries.push({ node, key: k, v });
+      }
+    }
+    Object.values(node).forEach((v) => walk(v, depth + 1));
+  };
+  walk(root, 0);
+  const sundayFirst = entries.some((e) => typeof e.v === 'number' && e.v === 0 && /day|dia|dow/i.test(e.key));
+  entries.forEach(({ node, key, v }) => {
+    let day = '';
+    if (typeof v === 'string') {
+      day = dayOf(v);
+      if (!day && /\d{4}-\d{2}-\d{2}/.test(v)) {
+        const t = Date.parse(v);
+        if (!Number.isNaN(t)) day = JS_DAYS[new Date(t).getDay()];
+      }
+    } else if (v > 1e12) day = JS_DAYS[new Date(v).getDay()];
+    else if (v > 1e9) day = JS_DAYS[new Date(v * 1000).getDay()];
+    else if (/day|dia|dow/i.test(key) && v >= 0 && v <= 7) day = sundayFirst ? JS_DAYS[v] : v >= 1 ? WEEK[v - 1] : 'domingo';
+    if (day) push(day, animeItem(node, baseUrl));
+  });
+  return finish();
+}
+
+// Rutas de API que aparecen en la página y en los scripts de la ruta (SvelteKit)
+async function discoverEndpoints(html, doc, pageUrl) {
+  const found = [];
+  const add = (u) => {
+    try {
+      const full = api.abs(u, pageUrl);
+      if (!found.includes(full) && !isStaticAsset(full) && !/google|discord|facebook|cloudflare|gstatic|\/horario\/?$/i.test(full)) found.push(full);
+    } catch (_) {}
+  };
+  const re = /["'`]((?:https?:\/\/[a-z0-9.-]*animeav1[a-z0-9.-]*)?\/(?:api|ajax)\/[A-Za-z0-9_\-\/.?=&%]*)["'`]/g;
+  let m;
+  while ((m = re.exec(html))) add(m[1]);
+
+  const srcs = Array.from(doc.querySelectorAll('link[rel="modulepreload"][href], script[src]'))
+    .map((el) => el.getAttribute('href') || el.getAttribute('src'))
+    .filter((h) => h && /\/(nodes|chunks|entry)\//.test(h));
+  const re2 = /["'`]((?:https?:\/\/[a-z0-9.-]*animeav1[a-z0-9.-]*)?\/(?:(?:api|ajax)\/[A-Za-z0-9_\-\/.?=&%]*|[A-Za-z0-9_\-\/]*(?:horario|schedule|calendar)[A-Za-z0-9_\-\/.?=&%]*))["'`]/g;
+  for (const s of srcs.slice(0, 10)) {
+    try {
+      const js = await api.text(api.abs(s, pageUrl));
+      let mm;
+      while ((mm = re2.exec(js))) add(mm[1]);
+    } catch (_) {}
+  }
+  return { found, srcs };
+}
 
 return {
   id: 'animeav1',
   name: 'AnimeAV1',
-  version: '1.1.0',
-  baseUrl: BASE, // la app saca de aquí el icono de la página
+  version: 7,
+  baseUrl: BASE_URL,
 
-  // Catálogo. filters = { genre, category, status, year, order } según lo que tenga el sitio
-  async home(page, filters) {
-    const q = [];
-    if (page && page > 1) q.push('page=' + page);
-    paramsFiltros(filters).forEach((x) => q.push(x));
-    const doc = await api.html(BASE + '/catalogo' + (q.length ? '?' + q.join('&') : ''), { headers: H });
-    return parseLista(doc);
-  },
+  filters: FILTERS,
 
-  // Búsqueda por nombre. Prueba los nombres de parámetro que usa el sitio y se queda con el que
-  // de verdad filtra (si el sitio ignora el parámetro devuelve el catálogo normal y se descarta).
-  async search(query, page, filters) {
-    const pag = page || 1;
-    const extra = paramsFiltros(filters);
-    if (!query) return this.home(pag, filters);
-    let normalDoc = null;
-    for (const nombre of ['search', 'q', 'query']) {
-      const q = [nombre + '=' + encodeURIComponent(query), 'page=' + pag].concat(extra);
-      const items = parseLista(await api.html(BASE + '/catalogo?' + q.join('&'), { headers: H }));
-      if (!items.length) continue;
-      if (!normalDoc) {
-        normalDoc = parseLista(await api.html(BASE + '/catalogo?page=' + pag, { headers: H }));
-      }
-      const igual = items.slice(0, 5).every((x, i) => normalDoc[i] && normalDoc[i].url === x.url);
-      if (!igual) return items;
-    }
-    return [];
-  },
-
-  // Todos los filtros que tiene el sitio: [{ key, name, options: [{ name, id }] }]
-  async filters() {
-    const grupos = {};
-    const orden = [];
-    const poner = (clave, nombre, valor) => {
-      const base = clave.replace(/\[\]$/, '');
-      if (NO_FILTRO[base] || !valor) return;
-      if (!grupos[clave]) { grupos[clave] = { key: clave, name: NOMBRES_FILTRO[base] || (base.charAt(0).toUpperCase() + base.slice(1)), options: [], vistos: {} }; orden.push(clave); }
-      const g = grupos[clave];
-      if (g.vistos[valor]) return;
-      g.vistos[valor] = true;
-      g.options.push({ name: limpiar(nombre) || valor, id: valor });
-    };
+  async home(page = 1) {
     try {
-      const doc = await api.html(BASE + '/catalogo', { headers: H });
-      doc.querySelectorAll('input[name]').forEach((i) => {
-        const t = (i.getAttribute('type') || '').toLowerCase();
-        if (t !== 'radio' && t !== 'checkbox') return;
-        const l = i.closest('label');
-        poner(i.getAttribute('name'), l ? l.textContent : (i.getAttribute('aria-label') || ''), i.getAttribute('value'));
-      });
-      doc.querySelectorAll('select[name]').forEach((s) => {
-        s.querySelectorAll('option').forEach((o) => poner(s.getAttribute('name'), o.textContent, o.getAttribute('value')));
-      });
-      doc.querySelectorAll('a[href*="catalogo?"]').forEach((a) => {
-        const href = String(a.getAttribute('href') || '');
-        const m = href.match(/[?&]([a-zA-Z_\[\]]+)=([^&#]+)/);
-        if (m && /^(genre|category|status|year|type|order)(\[\])?$/.test(m[1])) {
-          poner(m[1], a.textContent, decodeURIComponent(m[2]));
+      const url = api.abs(`/catalogo?page=${page}`, BASE_URL);
+      const doc = await api.html(url);
+      return parseCardList(doc, BASE_URL);
+    } catch (e) {
+      if (page > 1 && isNotFound(e)) return []; // ya no hay más páginas
+      throw e;
+    }
+  },
+
+  // Animes en emisión agrupados por día de la semana
+  async schedule() {
+    const url = api.abs('/horario', BASE_URL);
+    const html = await api.text(url);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+
+    // 1) si la página ya trae las tarjetas
+    const direct = parseSchedule(doc, url);
+    if (direct.length >= 2) return direct;
+
+    // 2) la página las carga con JS: buscar la API en la página y en sus scripts
+    const { found, srcs } = await discoverEndpoints(html, doc, url);
+    const defaults = ['/horario/__data.json', '/api/horario', '/api/schedule', '/api/schedules', '/api/calendar'].map((p) => api.abs(p, BASE_URL));
+    const tried = [];
+    for (const ep of found.concat(defaults).filter((v, i, a) => a.indexOf(v) === i).slice(0, 14)) {
+      const short = ep.replace(BASE_URL, '');
+      try {
+        const text = await api.text(ep, { headers: { Accept: 'application/json' } });
+        let data;
+        try { data = JSON.parse(text); } catch (_) { tried.push(short + ' (no JSON)'); continue; }
+        if (data && Array.isArray(data.nodes)) {
+          for (const node of data.nodes) {
+            if (node && Array.isArray(node.data)) {
+              const r = scheduleFromJson(devalueDecode(node.data), BASE_URL);
+              if (r.length >= 2) return r;
+            }
+          }
         }
-      });
-    } catch (e) {}
-    const res = orden.map((k) => grupos[k]).filter((g) => g.options.length >= 2)
-      .map((g) => ({ key: g.key, name: g.name, options: g.options }));
-    const tiene = (k) => res.some((g) => g.key.replace(/\[\]$/, '') === k);
-    // Lo que el sitio no dejó leer se completa con valores de respaldo
-    if (!tiene('genre')) res.unshift({ key: 'genre', name: 'Género', options: GENEROS_BASE });
-    if (!tiene('category') && !tiene('type')) {
-      res.push({ key: 'category', name: 'Tipo', options: [
-        { name: 'TV Anime', id: 'tv-anime' }, { name: 'Película', id: 'pelicula' },
-        { name: 'OVA', id: 'ova' }, { name: 'ONA', id: 'ona' }, { name: 'Especial', id: 'especial' }
-      ] });
-    }
-    if (!tiene('status')) {
-      res.push({ key: 'status', name: 'Estado', options: [
-        { name: 'En emisión', id: 'emision' }, { name: 'Finalizado', id: 'finalizado' }
-      ] });
-    }
-    return res;
-  },
-
-  // Se mantiene por compatibilidad con versiones anteriores de la app
-  async genres() {
-    const f = (await this.filters()).filter((g) => g.key === 'genre')[0];
-    return f ? f.options : GENEROS_BASE;
-  },
-
-  async details(slug) {
-    const doc = await api.html(BASE + '/media/' + slug, { headers: H });
-    const h1 = doc.querySelector('h1');
-    const generos = [];
-    doc.querySelectorAll('a[href*="catalogo?genre="]').forEach((a) => {
-      const t = limpiar(a.textContent);
-      if (t && generos.indexOf(t) < 0) generos.push(t);
-    });
-    let descripcion = '';
-    const ps = doc.querySelectorAll('p');
-    for (let i = 0; i < ps.length; i++) {
-      const t = limpiar(ps[i].textContent);
-      if (t.length > 60) { descripcion = t; break; }
-    }
-    const vistos = {};
-    const eps = [];
-    doc.querySelectorAll('a[href*="/media/' + slug + '/"]').forEach((a) => {
-      const m = ruta(a.getAttribute('href')).match(/\/media\/[^\/]+\/(\d+(?:\.\d+)?)\/?$/);
-      if (!m || vistos[m[1]]) return;
-      vistos[m[1]] = true;
-      eps.push({
-        number: parseFloat(m[1]),
-        title: 'Episodio ' + m[1],
-        url: BASE + '/media/' + slug + '/' + m[1]
-      });
-    });
-    eps.sort((a, b) => a.number - b.number);
-    return {
-      id: slug,
-      title: limpiar(h1 ? h1.textContent : '') || slug,
-      description: descripcion,
-      genres: generos,
-      episodes: eps
-    };
-  },
-
-  // Devuelve los servidores del episodio. Primero los que reproduce la app directamente (rápidos),
-  // después los reproductores web.
-  async videos(epUrl) {
-    const html = await api.text(epUrl, { headers: H });
-    const limpia = (u) => String(u).replace(/\\u002F/gi, '/').replace(/\\\//g, '/').replace(/&amp;/g, '&');
-    const directos = [];
-    const webs = [];
-    const vistos = {};
-    const poner = (lang, nombre, url) => {
-      url = limpia(url);
-      if (!/^https?:\/\//i.test(url) || vistos[url]) return;
-      vistos[url] = true;
-      const z = url.match(/^(https?:\/\/player\.zilla-networks\.com)\/play\/([A-Za-z0-9]+)/);
-      if (z) {
-        // Lista de reproducción directa: carga mucho más rápido que el reproductor web
-        directos.push({
-          label: nombre + ' directo',
-          url: z[1] + '/m3u8/' + z[2],
-          type: 'hls',
-          lang: lang,
-          headers: { Referer: z[1] + '/' }
-        });
+        const r = scheduleFromJson(data, BASE_URL);
+        if (r.length >= 2) return r;
+        tried.push(short + ' (sin días)');
+      } catch (e) {
+        tried.push(short + ' (' + (e && e.status ? e.status : 'error') + ')');
       }
-      webs.push({ label: nombre, url: url, type: 'embed', lang: lang });
+    }
+    throw new Error('probé: ' + (tried.join(' | ') || '-') + ' · scripts: ' + srcs.slice(0, 3).join(' | '));
+  },
+
+  // Episodios recién publicados (sección "Recientemente Actualizado" de la portada), en orden de salida
+  async latest() {
+    const url = api.abs('/', BASE_URL);
+    const html = await api.text(url);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const epInfo = (a) => {
+      const h = a.getAttribute('href') || '';
+      if (h.includes('#')) return null;
+      try {
+        const u = new URL(api.abs(h, url));
+        const m = u.pathname.match(/^\/media\/([^/]+)\/(\d+(?:\.\d+)?)\/?$/);
+        return m ? { slug: m[1], ep: m[2], full: u.href } : null;
+      } catch (_) { return null; }
+    };
+    const out = [];
+    const seen = new Set();
+    doc.querySelectorAll('a[href*="/media/"]').forEach((a) => {
+      const info = epInfo(a);
+      if (!info || seen.has(info.full)) return;
+
+      // tarjeta: sube mientras el contenedor solo tenga este episodio
+      let box = a;
+      for (let i = 0; i < 4 && box.parentElement; i++) {
+        const parent = box.parentElement;
+        const others = Array.from(parent.querySelectorAll('a[href*="/media/"]'))
+          .map(epInfo)
+          .filter((x) => x && x.full !== info.full);
+        if (others.length) break;
+        box = parent;
+      }
+      const img = box.querySelector('img');
+      const raw = img ? img.getAttribute('data-src') || img.getAttribute('src') || '' : '';
+
+      let title = (a.getAttribute('aria-label') || a.getAttribute('title') || a.textContent || '')
+        .replace(/\s+/g, ' ').trim().replace(/^Ver\s+/i, '');
+      title = title.replace(new RegExp('\\s+' + info.ep.replace('.', '\\.') + '$'), '').trim();
+      if (!title) {
+        const h = box.querySelector('h2, h3, h4');
+        title = h ? h.textContent.replace(/\s+/g, ' ').trim() : '';
+      }
+      if (!title) title = info.slug.replace(/-/g, ' ');
+
+      seen.add(info.full);
+      out.push({
+        title,
+        // la miniatura del episodio (thumbnails/ID) y la portada (covers/ID) comparten el mismo ID
+        cover: raw ? api.abs(raw.replace('/thumbnails/', '/covers/'), url) : '',
+        url: api.abs('/media/' + info.slug, BASE_URL),
+        note: 'Episodio ' + info.ep,
+        epUrl: info.full
+      });
+    });
+    return out;
+  },
+
+  async search(query, page = 1, filters = {}) {
+    const q = (query || '').trim();
+
+    // Filtros elegidos -> parámetros de la URL (género, tipo, estado)
+    const params = [];
+    for (const id of Object.keys(FILTER_PARAM)) {
+      const sel = filters && filters[id];
+      const val = Array.isArray(sel) ? sel[0] : sel;
+      if (val) params.push(`${FILTER_PARAM[id]}=${encodeURIComponent(val)}`);
+    }
+
+    const load = async (searchKey) => {
+      const qs = params.slice();
+      if (q) qs.push(`${searchKey}=${encodeURIComponent(q)}`);
+      qs.push(`page=${page}`);
+      const doc = await api.html(api.abs(`/catalogo?${qs.join('&')}`, BASE_URL));
+      return parseCardList(doc, BASE_URL);
     };
 
-    const bloque = /\b(SUB|DUB)["']?\s*:\s*\[([\s\S]*?)\]/g;
-    let b;
-    while ((b = bloque.exec(html))) {
-      const objetos = b[2].match(/\{[^{}]*\}/g) || [];
-      objetos.forEach((o) => {
-        const s = o.match(/["']?server["']?\s*:\s*["']([^"']+)["']/);
-        const u = o.match(/["']?url["']?\s*:\s*["']([^"']+)["']/);
-        if (s && u) poner(b[1], s[1], u[1]);
-      });
+    try {
+      const items = await load('search');
+      if (items.length > 0 || !q || page > 1) return items;
+      return await load('q');
+    } catch (e) {
+      if (page > 1 && isNotFound(e)) return []; // ya no hay más páginas
+      throw e;
     }
-    // Respaldo: cualquier reproductor de zilla que aparezca en la página
-    const z2 = html.match(/https?:\/\/player\.zilla-networks\.com\/play\/[A-Za-z0-9]+/g) || [];
-    z2.forEach((u) => poner('SUB', 'HLS', u));
+  },
 
-    const rank = (v) => (v.lang === 'SUB' ? 0 : 1);
-    const orden = (a, b2) => rank(a) - rank(b2);
-    directos.sort(orden);
-    webs.sort(orden);
-    return directos.concat(webs);
+  async details(url) {
+    const absUrl = api.abs(url, BASE_URL);
+    const htmlText = await api.text(absUrl);
+    const doc = new DOMParser().parseFromString(htmlText, 'text/html');
+
+    const title = pickText(doc, ['h1', '.anime-title', 'header h1', 'main h1']);
+
+    // Portada: og:image o la primera imagen que no sea el logo del sitio
+    const goodImg = (u) => !!u && !/^data:/i.test(u) && !/logo|favicon|placeholder/i.test(u);
+    const imgCandidates = [pickAttr(doc, ['meta[property="og:image"]'], 'content')].concat(
+      Array.from(doc.querySelectorAll('.poster img, .cover img, article img, main img, img')).map(
+        (el) => el.getAttribute('data-src') || el.getAttribute('src') || ''
+      )
+    );
+    const coverRaw = imgCandidates.find(goodImg) || '';
+    const cover = coverRaw ? api.abs(coverRaw, absUrl) : '';
+
+    const bannerRaw = pickAttr(
+      doc,
+      ['.banner img', '.backdrop img', '.cover-bg img'],
+      'src'
+    );
+    const banner = bannerRaw ? api.abs(bannerRaw, absUrl) : undefined;
+
+    const description = pickText(doc, [
+      '.synopsis',
+      '.description',
+      '[class*="synopsis"]',
+      '[class*="description"]',
+      'p'
+    ]);
+
+    const genres = Array.from(
+      doc.querySelectorAll('a[href*="/catalogo?genre="], a[href*="genre="], .genres a, .genre')
+    )
+      .map((el) => (el.textContent || '').trim())
+      .filter(Boolean);
+
+    const metaText = doc.body ? doc.body.textContent || '' : '';
+    const yearMatch = metaText.match(/\b(19\d\d|20\d\d)\b/);
+    const year = yearMatch ? Number(yearMatch[1]) : undefined;
+
+    let status;
+    if (/en emisión/i.test(metaText)) {
+      status = 'En emisión';
+    } else if (/finalizado|completado/i.test(metaText)) {
+      status = 'Finalizado';
+    }
+
+    const episodes = extractEpisodes(doc, htmlText, absUrl);
+
+    return {
+      title,
+      cover,
+      banner,
+      description,
+      genres: [...new Set(genres)],
+      year,
+      status,
+      episodes
+    };
+  },
+
+  async videos(episodeUrl, ctx) {
+    const absUrl = api.abs(episodeUrl, BASE_URL);
+    const html = await api.text(absUrl);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+
+    const found = [];
+    const seen = new Set();
+
+    const addSource = (rawUrl, langHint = '') => {
+      if (!rawUrl) return;
+      const cleaned = String(rawUrl)
+        .replace(/\\\//g, '/')
+        .replace(/\\u0026/g, '&')
+        .replace(/&amp;/g, '&')
+        .trim();
+
+      if (!cleaned || cleaned.startsWith('data:') || cleaned.startsWith('javascript:')) return;
+      const full = api.abs(cleaned, absUrl);
+      if (!full) return;
+      if (seen.has(full)) {
+        if (langHint) {
+          const ex = found.find((f) => f.url === full);
+          if (ex && !ex.lang) ex.lang = langHint;
+        }
+        return;
+      }
+      seen.add(full);
+
+      const classified = classifyFastServer(full);
+      if (classified) {
+        classified.lang = langHint;
+        found.push(classified);
+      }
+    };
+
+    doc.querySelectorAll('iframe').forEach((iframe) => {
+      addSource(
+        iframe.getAttribute('src') ||
+        iframe.getAttribute('data-src') ||
+        iframe.getAttribute('data-lazy-src') ||
+        '',
+        ctxLang(iframe)
+      );
+    });
+
+    doc.querySelectorAll('[data-embed], [data-player], [data-src], [data-url], [data-link]').forEach((el) => {
+      addSource(
+        el.getAttribute('data-embed') ||
+        el.getAttribute('data-player') ||
+        el.getAttribute('data-src') ||
+        el.getAttribute('data-url') ||
+        el.getAttribute('data-link') ||
+        '',
+        ctxLang(el)
+      );
+    });
+
+    const unescaped = html.replace(/\\\//g, '/').replace(/\\u0026/g, '&');
+    // La web agrupa los servidores bajo "SUB" y "DUB": cada URL toma el último marcador que aparece antes
+    const markers = [];
+    const markerRe = /["']?\b(SUB|DUB)\b["']?\s*:/g;
+    let mk;
+    while ((mk = markerRe.exec(unescaped))) markers.push({ i: mk.index, lang: mk[1] });
+    const langAt = (idx) => {
+      let l = '';
+      for (const m of markers) {
+        if (m.i < idx) l = m.lang;
+        else break;
+      }
+      return l;
+    };
+    const urlRe = /https?:\/\/[^\s"'<>\\]+/gi;
+    let um;
+    while ((um = urlRe.exec(unescaped))) {
+      addSource(um[0], langAt(um.index));
+    }
+
+    found.sort((a, b) => a.priority - b.priority);
+
+    return found.map(({ label, url, type, lang }) => ({
+      label,
+      url,
+      type,
+      lang
+    }));
   }
 };

@@ -79,15 +79,20 @@
             tieneHome: typeof m.home === 'function',
             tieneSearch: typeof m.search === 'function',
             tieneGenres: typeof m.genres === 'function',
-            tieneFilters: typeof m.filters === 'function',
+            tieneFilters: typeof m.filters === 'function' || Array.isArray(m.filters),
+            tieneLatest: typeof m.latest === 'function',
             icon: m.icon ? String(m.icon) : '',
             baseUrl: m.baseUrl ? String(m.baseUrl) : '',
             version: m.version != null ? String(m.version) : ''
           };
         } else {
-          if (typeof m[metodo] !== 'function') throw new Error('El módulo no define ' + metodo + '()');
           var a = JSON.parse(argsJson || '[]');
-          if (metodo === 'videos') {
+          if (metodo === 'filters' && typeof m.filters !== 'function') {
+            // Algunos módulos declaran los filtros como una lista y no como función
+            out = Array.isArray(m.filters) ? m.filters : [];
+          } else if (typeof m[metodo] !== 'function') {
+            throw new Error('El módulo no define ' + metodo + '()');
+          } else if (metodo === 'videos') {
             var epUrl = a[0], ep = a[1] || {}, detUrl = a[2];
             var dk = clave + '|' + detUrl;
             var det = detCache[dk];
