@@ -21,7 +21,7 @@ object ImageLoader {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
 
-    // Máximo 4 descargas a la vez (antes era un hilo por imagen)
+    // Máximo 4 descargas a la vez
     private val pool = Executors.newFixedThreadPool(4)
     private var carpeta: File? = null
 
@@ -38,7 +38,7 @@ object ImageLoader {
         return h.joinToString("") { "%02x".format(it) }
     }
 
-    // Reduce la imagen al tamaño que se necesita, así carga rápido y gasta poca memoria
+    // Reduce la imagen al tamaño que se necesita: carga rápido y gasta poca memoria
     private fun decodificar(bytes: ByteArray): Bitmap? {
         val medida = BitmapFactory.Options()
         medida.inJustDecodeBounds = true
@@ -50,12 +50,46 @@ object ImageLoader {
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
     }
 
-    fun cargar(url: String, vista: ImageView) {
-        vista.tag = url
+    // Lee la imagen del disco o la descarga (se llama desde un hilo del pool)
+    private fun obtener(url: String): Bitmap? {
+        cache.get(url)?.let { return it }
+        val archivo = File(dir(), nombreArchivo(url))
+        val bytes = if (archivo.exists()) {
+            archivo.readBytes()
+        } else {
+            val con = URL(url).openConnection() as HttpURLConnection
+            con.connectTimeout = 10000
+            con.readTimeout = 10000
+            con.setRequestProperty("User-Agent", "Mozilla/5.0")
+            val b = con.inputStream.use { it.readBytes() }
+            con.disconnect()
+            try {
+                archivo.writeBytes(b)
+            } catch (e: Exception) {
+                // sin caché en disco, no pasa nada
+            }
+            b
+        }
+        return decodificar(bytes)
+    }
+
+    // Versión diminuta de la imagen: al estirarla se ve borrosa (para el fondo de la portada)
+    private fun desenfocar(bmp: Bitmap): Bitmap {
+        val ancho = 32
+        val alto = (ancho * bmp.height / bmp.width).coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(bmp, ancho, alto, true)
+    }
+
+    fun cargar(url: String, vista: ImageView) = poner(url, url, vista, false)
+
+    fun cargarDesenfocada(url: String, vista: ImageView) = poner(url + "#borrosa", url, vista, true)
+
+    private fun poner(clave: String, url: String, vista: ImageView, borrosa: Boolean) {
+        vista.tag = clave
         vista.setImageDrawable(null)
         if (url.isEmpty()) return
 
-        val guardada = cache.get(url)
+        val guardada = cache.get(clave)
         if (guardada != null) {
             vista.setImageBitmap(guardada)
             return
@@ -64,30 +98,12 @@ object ImageLoader {
         pool.execute {
             try {
                 // Si la lista ya reutilizó esta vista para otra imagen, no se descarga
-                if (vista.tag != url) return@execute
-                val archivo = File(dir(), nombreArchivo(url))
-                val bytes = if (archivo.exists()) {
-                    archivo.readBytes()
-                } else {
-                    val con = URL(url).openConnection() as HttpURLConnection
-                    con.connectTimeout = 10000
-                    con.readTimeout = 10000
-                    con.setRequestProperty("User-Agent", "Mozilla/5.0")
-                    val b = con.inputStream.use { it.readBytes() }
-                    con.disconnect()
-                    try {
-                        archivo.writeBytes(b)
-                    } catch (e: Exception) {
-                        // sin caché en disco, no pasa nada
-                    }
-                    b
-                }
-                val bmp = decodificar(bytes)
-                if (bmp != null) {
-                    cache.put(url, bmp)
-                    vista.post {
-                        if (vista.tag == url) vista.setImageBitmap(bmp)
-                    }
+                if (vista.tag != clave) return@execute
+                val original = obtener(url) ?: return@execute
+                val listo = if (borrosa) desenfocar(original) else original
+                cache.put(clave, listo)
+                vista.post {
+                    if (vista.tag == clave) vista.setImageBitmap(listo)
                 }
             } catch (e: Exception) {
                 // Si falla, queda el fondo gris

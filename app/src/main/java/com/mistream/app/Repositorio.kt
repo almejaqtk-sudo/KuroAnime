@@ -3,6 +3,7 @@ package com.mistream.app
 import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.net.URL
 import java.util.UUID
 
@@ -162,8 +163,93 @@ object Repositorio {
             errores.addAll(r.second)
         }
         pool.shutdown()
-        registro = modulos.flatMap { it.items }
+        // Si todo falló (sin internet, por ejemplo) se conserva el catálogo anterior
+        if (modulos.isNotEmpty()) registro = modulos.flatMap { it.items }
         return Resultado(modulos, errores)
+    }
+
+    // ---- Catálogo guardado en disco: al abrir la app se muestra al instante ----
+    private fun firma(fuentes: List<String>): String =
+        fuentes.joinToString("\u0001").hashCode().toString()
+
+    fun guardarCache(fuentes: List<String>, r: Resultado) {
+        try {
+            val raiz = JSONObject()
+            raiz.put("firma", firma(fuentes))
+            val arr = JSONArray()
+            for (m in r.modulos) {
+                val mo = JSONObject()
+                mo.put("nombre", m.nombre)
+                mo.put("fuente", m.items.firstOrNull()?.fuente ?: "")
+                val lista = JSONArray()
+                for (item in m.items) {
+                    val o = JSONObject()
+                    o.put("titulo", item.titulo)
+                    o.put("portada", item.portada)
+                    o.put("descripcion", item.descripcion)
+                    o.put("modulo", item.modulo)
+                    o.put("tipo", item.tipo)
+                    o.put("estado", item.estado)
+                    o.put("ultimo", item.ultimo)
+                    o.put("id", item.id)
+                    o.put("generos", JSONArray(item.generos))
+                    o.put("ep", JSONArray(ModuloParser.episodiosAJson(item.episodios)))
+                    lista.put(o)
+                }
+                mo.put("items", lista)
+                arr.put(mo)
+            }
+            raiz.put("modulos", arr)
+            File(KuroApp.contexto.filesDir, "catalogo.json").writeText(raiz.toString())
+        } catch (e: Exception) {
+            // sin caché, no pasa nada
+        }
+    }
+
+    fun leerCache(fuentes: List<String>): Resultado? {
+        try {
+            val f = File(KuroApp.contexto.filesDir, "catalogo.json")
+            if (!f.exists()) return null
+            val raiz = JSONObject(f.readText())
+            if (raiz.optString("firma") != firma(fuentes)) return null
+            val modulos = mutableListOf<Modulo>()
+            val arr = raiz.getJSONArray("modulos")
+            for (i in 0 until arr.length()) {
+                val mo = arr.getJSONObject(i)
+                val fuente = mo.optString("fuente", "")
+                val its = mo.getJSONArray("items")
+                val lista = mutableListOf<Item>()
+                for (j in 0 until its.length()) {
+                    val o = its.getJSONObject(j)
+                    val gs = mutableListOf<String>()
+                    val ga = o.optJSONArray("generos")
+                    if (ga != null) for (k in 0 until ga.length()) gs.add(ga.getString(k))
+                    lista.add(
+                        Item(
+                            titulo = o.getString("titulo"),
+                            episodios = ModuloParser.episodiosDeJson(
+                                (o.optJSONArray("ep") ?: JSONArray()).toString()
+                            ),
+                            portada = o.optString("portada", ""),
+                            descripcion = o.optString("descripcion", ""),
+                            modulo = o.optString("modulo", ""),
+                            generos = gs,
+                            tipo = o.optString("tipo", ""),
+                            estado = o.optString("estado", ""),
+                            ultimo = o.optString("ultimo", ""),
+                            id = o.optString("id", ""),
+                            fuente = fuente
+                        )
+                    )
+                }
+                modulos.add(Modulo(mo.getString("nombre"), lista))
+            }
+            if (modulos.isEmpty()) return null
+            registro = modulos.flatMap { it.items }
+            return Resultado(modulos, emptyList())
+        } catch (e: Exception) {
+            return null
+        }
     }
 
     private fun cargarUna(

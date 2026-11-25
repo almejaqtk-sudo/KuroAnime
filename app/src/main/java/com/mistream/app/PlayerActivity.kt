@@ -7,9 +7,12 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ActivityInfo
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -21,9 +24,9 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -56,46 +59,28 @@ class PlayerActivity : Activity() {
     private var listaServidores: List<ServerLink> = emptyList()
     private var reproduciendo = false
 
-    // Barra de controles propia
+    // Controles de arriba: volver (círculo) y botones oscuros a la derecha
+    private lateinit var bAtras: TextView
     private lateinit var barra: LinearLayout
-    private lateinit var bMenu: Button
-    private lateinit var bAnterior: Button
-    private lateinit var bSiguiente: Button
-    private lateinit var bServidores: Button
-    private lateinit var bTamano: Button
+    private lateinit var bAnterior: TextView
+    private lateinit var bSiguiente: TextView
+    private lateinit var bEscala: TextView
+    private lateinit var bServidores: TextView
     private var controlesVisibles = false
-    private var menuWebAbierto = false
-
-    // Tamaño del video (ExoPlayer)
-    private val modosTamano = listOf(
-        AspectRatioFrameLayout.RESIZE_MODE_FIT,
-        AspectRatioFrameLayout.RESIZE_MODE_ZOOM,
-        AspectRatioFrameLayout.RESIZE_MODE_FILL,
-        AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH,
-        AspectRatioFrameLayout.RESIZE_MODE_FIXED_HEIGHT
-    )
-    private val nombresTamano = listOf(
-        "Ajustar (se ve completo)",
-        "Rellenar / Zoom (recorta bordes)",
-        "Alargar (estira el video)",
-        "Ajustar al ancho",
-        "Ajustar al alto"
-    )
-    private var idxTamano = 0
-
-    // Tamaño en los servidores web
-    private val nombresTamanoWeb = listOf(
-        "Ajustar (se ve completo)",
-        "Rellenar / Zoom (recorta bordes)",
-        "Alargar (estira el video)",
-        "Zoom 125%",
-        "Zoom 150%"
-    )
-    private var idxTamanoWeb = 0
-    private val ocultadorMenu = Runnable {
-        menuWebAbierto = false
+    private var barraWebVisible = false
+    private val ocultadorBarra = Runnable {
+        barraWebVisible = false
         actualizarBarra()
     }
+
+    // Escala: solo 3 opciones (la misma para video directo y para servidores web)
+    private val modosEscala = listOf(
+        AspectRatioFrameLayout.RESIZE_MODE_FIT,   // Ajustar: se ve completo
+        AspectRatioFrameLayout.RESIZE_MODE_ZOOM,  // Rellenar: llena la pantalla recortando bordes
+        AspectRatioFrameLayout.RESIZE_MODE_FILL   // Alargar: estira el video a toda la pantalla
+    )
+    private val nombresEscala = listOf("Ajustar", "Rellenar", "Alargar")
+    private var idxEscala = 0
 
     // Servidores web (embed) dentro de la misma pantalla
     private var web: WebView? = null
@@ -105,6 +90,8 @@ class PlayerActivity : Activity() {
     private var fallosWeb = 0
     private var vistaCompleta: View? = null
     private var callbackCompleta: WebChromeClient.CustomViewCallback? = null
+
+    private fun dp(v: Int) = Ui.dp(this, v)
 
     @Suppress("DEPRECATION")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -134,63 +121,64 @@ class PlayerActivity : Activity() {
             return
         }
 
-        idxTamano = prefs.getInt("resize_idx", 0).coerceIn(0, modosTamano.size - 1)
-        idxTamanoWeb = prefs.getInt("resize_web", 0).coerceIn(0, nombresTamanoWeb.size - 1)
+        idxEscala = prefs.getInt("escala_idx", 0).coerceIn(0, modosEscala.size - 1)
 
         raiz = FrameLayout(this)
         raiz.setBackgroundColor(Color.BLACK)
         vistaExo = PlayerView(this)
-        vistaExo.resizeMode = modosTamano[idxTamano]
+        vistaExo.resizeMode = modosEscala[idxEscala]
         raiz.addView(vistaExo)
 
-        // Botón ☰ (solo en modo web, para mostrar/ocultar la barra)
-        bMenu = boton("☰") {
-            menuWebAbierto = !menuWebAbierto
-            actualizarBarra()
-            barra.removeCallbacks(ocultadorMenu)
-            if (menuWebAbierto) barra.postDelayed(ocultadorMenu, 6000)
-        }
-        val lpMenu = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT
-        )
-        lpMenu.gravity = Gravity.TOP or Gravity.START
-        lpMenu.setMargins(24, 24, 0, 0)
-        raiz.addView(bMenu, lpMenu)
+        // Volver: círculo oscuro arriba a la izquierda
+        bAtras = TextView(this)
+        bAtras.text = "←"
+        bAtras.setTextColor(Color.parseColor("#C7D2FE"))
+        bAtras.textSize = 22f
+        bAtras.gravity = Gravity.CENTER
+        val circ = GradientDrawable()
+        circ.shape = GradientDrawable.OVAL
+        circ.setColor(Color.parseColor("#B3181B2A"))
+        bAtras.background = circ
+        bAtras.setOnClickListener { finish() }
+        val lpAtras = FrameLayout.LayoutParams(dp(46), dp(46))
+        lpAtras.gravity = Gravity.TOP or Gravity.START
+        lpAtras.setMargins(dp(16), dp(12), 0, 0)
+        raiz.addView(bAtras, lpAtras)
 
-        // Barra: anterior · episodios · siguiente · servidores · tamaño
+        // Botones oscuros arriba a la derecha
         barra = LinearLayout(this)
         barra.orientation = LinearLayout.HORIZONTAL
-        bAnterior = boton("◀ Anterior") {
+        bAnterior = pill("‹ Anterior") {
             guardarPosicion()
             cargarEpisodio(indiceEp - 1)
         }
-        val bEpisodios = boton("Episodios") { mostrarEpisodios() }
-        bSiguiente = boton("Siguiente ▶") {
+        bSiguiente = pill("Siguiente ›") {
             guardarPosicion()
             cargarEpisodio(indiceEp + 1)
         }
-        bServidores = boton("Servidores") {
+        bEscala = pill("Escala") { cambiarEscala() }
+        val bEpisodios = pill("Episodios") { mostrarEpisodios() }
+        bServidores = pill("Servidor") {
             if (listaServidores.isNotEmpty()) mostrarSelector()
         }
-        bTamano = boton("Tamaño") { mostrarTamanos() }
-        for (b in listOf(bAnterior, bEpisodios, bSiguiente, bServidores, bTamano)) {
+        for (b in listOf(bAnterior, bSiguiente, bEscala, bEpisodios, bServidores)) {
             val lpb = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
-            lpb.setMargins(8, 0, 8, 0)
+            lpb.leftMargin = dp(8)
             barra.addView(b, lpb)
         }
         val lpBarra = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
             FrameLayout.LayoutParams.WRAP_CONTENT
         )
-        lpBarra.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-        lpBarra.setMargins(0, 24, 0, 0)
+        lpBarra.gravity = Gravity.TOP or Gravity.END
+        lpBarra.setMargins(0, dp(12), dp(16), 0)
         raiz.addView(barra, lpBarra)
         setContentView(raiz)
 
+        // Con video directo, los botones aparecen y desaparecen junto con los controles
         vistaExo.setControllerVisibilityListener(
             PlayerView.ControllerVisibilityListener { visibilidad ->
                 controlesVisibles = visibilidad == View.VISIBLE
@@ -217,7 +205,7 @@ class PlayerActivity : Activity() {
                 } else {
                     Toast.makeText(
                         this@PlayerActivity,
-                        "Ningún servidor funcionó. Prueba con el botón Servidores.",
+                        "Ningún servidor funcionó. Prueba con el botón Servidor.",
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -234,14 +222,19 @@ class PlayerActivity : Activity() {
         cargarEpisodio(indiceEp)
     }
 
-    private fun boton(texto: String, accion: () -> Unit): Button {
-        val b = Button(this)
-        b.text = texto
-        b.isAllCaps = false
-        b.textSize = 12f
-        b.alpha = 0.9f
-        b.setOnClickListener { accion() }
-        return b
+    // Botón oscuro redondeado con texto claro
+    private fun pill(texto: String, accion: () -> Unit): TextView {
+        val t = TextView(this)
+        t.text = texto
+        t.setTextColor(Color.parseColor("#C7D2FE"))
+        t.textSize = 14f
+        t.setTypeface(null, Typeface.BOLD)
+        t.gravity = Gravity.CENTER
+        t.maxLines = 1
+        t.setPadding(dp(18), dp(11), dp(18), dp(11))
+        t.background = Ui.fondo(this, Color.parseColor("#B3181B2A"), 30)
+        t.setOnClickListener { accion() }
+        return t
     }
 
     private fun haySiguiente() = indiceEp < episodios.size - 1
@@ -250,16 +243,27 @@ class PlayerActivity : Activity() {
 
     private fun actualizarBarra() {
         if (!::barra.isInitialized) return
-        val mostrar = if (modoWeb) menuWebAbierto else controlesVisibles
-        barra.visibility = if (mostrar) View.VISIBLE else View.GONE
-        bMenu.visibility = if (modoWeb) View.VISIBLE else View.GONE
+        val mostrar = if (modoWeb) barraWebVisible else controlesVisibles
+        val v = if (mostrar) View.VISIBLE else View.GONE
+        barra.visibility = v
+        bAtras.visibility = v
         bAnterior.visibility = if (indiceEp > 0) View.VISIBLE else View.GONE
         bSiguiente.visibility = if (haySiguiente()) View.VISIBLE else View.GONE
         bServidores.visibility = if (listaServidores.size > 1) View.VISIBLE else View.GONE
-        bTamano.visibility = View.VISIBLE
+        bEscala.text = "Escala: " + nombresEscala[idxEscala]
     }
 
-    // Escala del iframe para simular ajustar / rellenar / alargar / zoom en los servidores web
+    // En servidores web los botones salen al tocar la pantalla y se ocultan solos
+    private fun mostrarBarraWeb() {
+        barraWebVisible = true
+        actualizarBarra()
+        barra.removeCallbacks(ocultadorBarra)
+        barra.postDelayed(ocultadorBarra, 4000)
+    }
+
+    // ---------- Escala: Ajustar / Rellenar / Alargar ----------
+
+    // Para servidores web: escala del iframe que simula ajustar, rellenar o alargar (video 16:9)
     private fun transformWeb(idx: Int): String {
         val w = raiz.width.toFloat()
         val h = raiz.height.toFloat()
@@ -267,41 +271,25 @@ class PlayerActivity : Activity() {
         return when (idx) {
             1 -> "scale(" + f + ")"
             2 -> "scale(" + f + ",1)"
-            3 -> "scale(1.25)"
-            4 -> "scale(1.5)"
             else -> "none"
         }
     }
 
-    private fun mostrarTamanos() {
-        val nombres = if (modoWeb) nombresTamanoWeb else nombresTamano
-        val actual = if (modoWeb) idxTamanoWeb else idxTamano
-        AlertDialog.Builder(this)
-            .setTitle("Tamaño de pantalla")
-            .setSingleChoiceItems(nombres.toTypedArray(), actual) { d, which ->
-                d.dismiss()
-                aplicarTamano(which)
-            }
-            .setNegativeButton("Cerrar", null)
-            .show()
+    private fun cambiarEscala() {
+        idxEscala = (idxEscala + 1) % modosEscala.size
+        prefs.edit().putInt("escala_idx", idxEscala).apply()
+        aplicarEscala()
+        actualizarBarra()
+        if (modoWeb) mostrarBarraWeb()
     }
 
-    private fun aplicarTamano(idx: Int) {
-        if (modoWeb) {
-            idxTamanoWeb = idx
-            prefs.edit().putInt("resize_web", idx).apply()
-            web?.evaluateJavascript(
-                "var f=document.getElementById('f');if(f){f.style.transform='" +
-                    transformWeb(idx) + "';}",
-                null
-            )
-            Toast.makeText(this, nombresTamanoWeb[idx], Toast.LENGTH_SHORT).show()
-        } else {
-            idxTamano = idx
-            vistaExo.resizeMode = modosTamano[idx]
-            prefs.edit().putInt("resize_idx", idx).apply()
-            Toast.makeText(this, nombresTamano[idx], Toast.LENGTH_SHORT).show()
-        }
+    private fun aplicarEscala() {
+        vistaExo.resizeMode = modosEscala[idxEscala]
+        web?.evaluateJavascript(
+            "var f=document.getElementById('f');if(f){f.style.transform='" +
+                transformWeb(idxEscala) + "';}",
+            null
+        )
     }
 
     private fun mostrarEpisodios() {
@@ -441,7 +429,7 @@ class PlayerActivity : Activity() {
 
     // ---------- Servidores web (embed) dentro de esta pantalla ----------
 
-    @SuppressLint("SetJavaScriptEnabled")
+    @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     private fun asegurarWeb(): WebView {
         web?.let { return it }
         val w = WebView(this)
@@ -454,6 +442,12 @@ class PlayerActivity : Activity() {
         s.javaScriptCanOpenWindowsAutomatically = false
         s.setSupportMultipleWindows(false)
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
+
+        // Un toque en la pantalla muestra los botones (y el toque sigue llegando al reproductor)
+        w.setOnTouchListener { _, ev ->
+            if (ev.action == MotionEvent.ACTION_UP) mostrarBarraWeb()
+            false
+        }
 
         w.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -501,7 +495,7 @@ class PlayerActivity : Activity() {
                 salirPantallaCompleta()
             }
         }
-        // Va encima del reproductor y debajo de la barra de controles
+        // Va encima del reproductor y debajo de los botones
         raiz.addView(
             w,
             1,
@@ -523,13 +517,10 @@ class PlayerActivity : Activity() {
         fallosWeb = 0
         reproduciendo = true
         modoWeb = true
-        menuWebAbierto = true
-        barra.removeCallbacks(ocultadorMenu)
-        barra.postDelayed(ocultadorMenu, 5000)
         vistaExo.visibility = View.GONE
         asegurarWeb().visibility = View.VISIBLE
         cargarWeb()
-        actualizarBarra()
+        mostrarBarraWeb()
     }
 
     private fun cargarWeb() {
@@ -542,7 +533,7 @@ class PlayerActivity : Activity() {
             "<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}" +
             "iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0;" +
             "transform-origin:center center}</style>" +
-            "</head><body><iframe id=\"f\" style=\"transform:" + transformWeb(idxTamanoWeb) + "\" " +
+            "</head><body><iframe id=\"f\" style=\"transform:" + transformWeb(idxEscala) + "\" " +
             "src=\"" + seguro + "\" " +
             "sandbox=\"allow-scripts allow-same-origin allow-forms allow-presentation\" " +
             "allow=\"autoplay; fullscreen; encrypted-media; picture-in-picture\" " +
@@ -555,7 +546,7 @@ class PlayerActivity : Activity() {
         if (fallosWeb >= urlsWeb.size) {
             Toast.makeText(
                 this,
-                "Ningún servidor web abrió. Prueba con ☰ y Servidores.",
+                "Ningún servidor web abrió. Toca la pantalla y elige Servidor.",
                 Toast.LENGTH_LONG
             ).show()
             return
@@ -566,7 +557,7 @@ class PlayerActivity : Activity() {
 
     private fun ocultarWeb() {
         modoWeb = false
-        menuWebAbierto = false
+        barraWebVisible = false
         web?.let {
             it.loadUrl("about:blank")
             it.visibility = View.GONE

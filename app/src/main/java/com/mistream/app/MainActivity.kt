@@ -240,14 +240,14 @@ class MainActivity : Activity() {
         }
         titulo.text = "Cargando módulos..."
         Thread {
+            // 1) El catálogo de la última vez se muestra al instante
+            val guardado = Repositorio.leerCache(urls)
+            if (guardado != null) runOnUiThread { aplicarResultado(guardado) }
+            // 2) Se actualiza con lo más nuevo
             val r = Repositorio.cargarTodo(urls)
+            if (r.modulos.isNotEmpty()) Repositorio.guardarCache(urls, r)
             runOnUiThread {
-                todos = r.modulos.flatMap { it.items }
-                nombresModulos = r.modulos.map { it.nombre }.distinct()
-                val sel = moduloSel
-                if (sel != null && !nombresModulos.contains(sel)) moduloSel = null
-                pModulo.text = (moduloSel ?: "Todos") + " ▾"
-                actualizar()
+                if (r.modulos.isNotEmpty() || guardado == null) aplicarResultado(r)
                 if (r.errores.isNotEmpty()) {
                     Toast.makeText(
                         this,
@@ -257,6 +257,15 @@ class MainActivity : Activity() {
                 }
             }
         }.start()
+    }
+
+    private fun aplicarResultado(r: Repositorio.Resultado) {
+        todos = r.modulos.flatMap { it.items }
+        nombresModulos = r.modulos.map { it.nombre }.distinct()
+        val sel = moduloSel
+        if (sel != null && !nombresModulos.contains(sel)) moduloSel = null
+        pModulo.text = (moduloSel ?: "Todos") + " ▾"
+        actualizar()
     }
 
     private fun pasaFiltros(item: Item): Boolean {
