@@ -20,7 +20,47 @@ object Repositorio {
         var activo: Boolean
     )
 
-    val CATEGORIAS = listOf("Anime", "Películas", "Series", "Otros")
+    val CATEGORIAS = listOf("Anime", "Películas", "Hentai", "Adultos")
+
+    // Decide en qué sección va un módulo según su nombre y la dirección de su página
+    fun detectarCategoria(nombre: String, texto: String): String {
+        val host = try {
+            val m = Regex("""https?://([^/\s'"`]+)""").find(texto)
+            m?.groupValues?.get(1) ?: ""
+        } catch (e: Exception) {
+            ""
+        }
+        val t = (nombre + " " + host).lowercase()
+        return when {
+            t.contains("hentai") -> "Hentai"
+            Regex("jav|porn|xxx|xvideo|xnxx|xhamster|adult|erotic|nsfw|sexo|sex").containsMatchIn(t) -> "Adultos"
+            Regex("pelis|pelicula|movie|cine|film|serie|cuevana|repelis|flix").containsMatchIn(t) -> "Películas"
+            else -> "Anime"
+        }
+    }
+
+    // Una sola vez: los módulos que estaban en secciones que ya no existen (Series, Otros) o en "Anime"
+    // por defecto se acomodan según lo que son
+    private fun migrarCategorias(prefs: SharedPreferences) {
+        if (prefs.getBoolean("cat_v2", false)) return
+        try {
+            val lista = leerInstalados(prefs)
+            var cambio = false
+            for (m in lista) {
+                if (m.categoria !in CATEGORIAS || m.categoria == "Anime") {
+                    val nueva = detectarCategoria(m.nombre, if (m.tipo == "url") m.valor else m.valor.take(4000))
+                    if (nueva != m.categoria) {
+                        m.categoria = nueva
+                        cambio = true
+                    }
+                }
+            }
+            if (cambio) guardarInstalados(prefs, lista)
+            prefs.edit().putBoolean("cat_v2", true).apply()
+        } catch (e: Exception) {
+            // se intentará la próxima vez
+        }
+    }
 
     // Títulos cargados en memoria, para encontrarlos al abrir el detalle
     @Volatile
@@ -42,6 +82,7 @@ object Repositorio {
     // Los demás módulos de AnimeAV1 que ya tenías se desactivan (no se borran) para no ver todo repetido.
     @Synchronized
     fun asegurarIntegrado(prefs: SharedPreferences) {
+        migrarCategorias(prefs)
         if (prefs.getInt("integrado_av1", 0) >= VERSION_INTEGRADO) return
         try {
             val codigo = KuroApp.contexto.assets.open("animeav1.js")
@@ -127,7 +168,7 @@ object Repositorio {
     fun leerUrls(prefs: SharedPreferences): MutableList<String> =
         leerInstalados(prefs).filter { it.activo }.map { it.valor }.toMutableList()
 
-    fun instalarTexto(prefs: SharedPreferences, texto: String, categoria: String): String {
+    fun instalarTexto(prefs: SharedPreferences, texto: String, categoria: String? = null): String {
         val t = texto.trim()
         if (t.isEmpty()) throw IllegalArgumentException("Está vacío")
         val lista = leerInstalados(prefs)
@@ -135,7 +176,7 @@ object Repositorio {
         if (t.startsWith("http")) {
             if (lista.any { it.valor == t }) throw IllegalArgumentException("Ya está instalado")
             val nombre = nombreDeUrl(t)
-            lista.add(Instalado(nuevoId(), nombre, categoria, "url", t, true))
+            lista.add(Instalado(nuevoId(), nombre, categoria ?: detectarCategoria(nombre, t), "url", t, true))
             guardarInstalados(prefs, lista)
             return nombre
         }
@@ -152,7 +193,7 @@ object Repositorio {
             // Módulo JavaScript
             Motores.nombreDe(t)
         }
-        lista.add(Instalado(nuevoId(), nombre, categoria, "codigo", t, true))
+        lista.add(Instalado(nuevoId(), nombre, categoria ?: detectarCategoria(nombre, t.take(4000)), "codigo", t, true))
         guardarInstalados(prefs, lista)
         return nombre
     }

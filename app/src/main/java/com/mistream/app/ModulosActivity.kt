@@ -159,22 +159,6 @@ Reglas: el "tipo" del servidor puede ser mp4, hls o dash. Puedes añadir "header
         }
         raiz.addView(bArchivo, lpBoton())
 
-        val bPlantilla = boton("Copiar plantilla para pedirle módulos a tu IA", chip, Color.WHITE)
-        bPlantilla.setOnClickListener {
-            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            cm.setPrimaryClip(ClipData.newPlainText("plantilla", plantilla))
-            Toast.makeText(this, "Plantilla copiada", Toast.LENGTH_SHORT).show()
-        }
-        raiz.addView(bPlantilla, lpBoton())
-
-        val ayuda = TextView(this)
-        ayuda.text = "Un módulo es un archivo JSON con tu catálogo: títulos, portadas y enlaces de episodios. " +
-            "Instala solo módulos que hayas creado tú o de personas de confianza, y con contenido que tengas derecho a ver."
-        ayuda.setTextColor(Ui.GRIS)
-        ayuda.textSize = 13f
-        ayuda.setPadding(dp(2), dp(16), dp(2), 0)
-        raiz.addView(ayuda)
-
         setContentView(scroll)
         refrescar()
     }
@@ -215,16 +199,19 @@ Reglas: el "tipo" del servidor puede ser mp4, hls o dash. Puedes añadir "header
     }
 
     private fun instalar(texto: String) {
-        val categoria = Repositorio.CATEGORIAS[categoriaSel]
         Toast.makeText(this, "Instalando...", Toast.LENGTH_SHORT).show()
         // En hilo aparte: los módulos de AnimeHub se validan en un WebView
         Thread {
             try {
-                val nombre = Repositorio.instalarTexto(prefs, texto, categoria)
+                // La sección (Anime, Películas, Hentai, Adultos) se decide sola según el módulo
+                val nombre = Repositorio.instalarTexto(prefs, texto, null)
+                val seccion = Repositorio.leerInstalados(prefs).lastOrNull { it.nombre == nombre }?.categoria ?: ""
                 runOnUiThread {
                     campo.setText("")
+                    val idx = Repositorio.CATEGORIAS.indexOf(seccion)
+                    if (idx >= 0) categoriaSel = idx
                     refrescar()
-                    Toast.makeText(this, "Instalado: $nombre", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Instalado en " + seccion + ": " + nombre, Toast.LENGTH_SHORT).show()
                 }
             } catch (e: JSONException) {
                 runOnUiThread {

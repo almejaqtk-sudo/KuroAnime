@@ -127,7 +127,7 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         )
 
-        pModulo = Ui.pildora(this, "Todos ▾")
+        pModulo = Ui.pildora(this, "Módulos ▾")
         cabecera.addView(pModulo)
         contenido.addView(cabecera)
 
@@ -317,9 +317,14 @@ class MainActivity : Activity() {
         modulosCargados = r.modulos
         todos = r.modulos.flatMap { it.items }
         nombresModulos = r.modulos.map { it.nombre }.distinct()
+        // Siempre hay un módulo elegido: el último que usaste o, si no hay, el primero de la lista
         val sel = moduloSel
-        if (sel != null && !nombresModulos.contains(sel)) moduloSel = null
-        pModulo.text = (moduloSel ?: "Todos") + " ▾"
+        if (sel == null || !nombresModulos.contains(sel)) {
+            val guardado = prefs.getString("modulo_sel", null)
+            moduloSel = if (guardado != null && nombresModulos.contains(guardado)) guardado
+            else ordenModulos().firstOrNull()?.second?.firstOrNull() ?: nombresModulos.firstOrNull()
+        }
+        pModulo.text = (moduloSel ?: "Módulos") + " ▾"
         reconstruirFiltros()
         actualizar()
     }
@@ -406,27 +411,38 @@ class MainActivity : Activity() {
 
     // ---------- Selector de módulo (con la imagen de cada página) ----------
 
-    private fun dialogoModulo() {
+    // Módulos agrupados por sección (Anime, Películas, Hentai, Adultos), en ese orden
+    private fun ordenModulos(): List<Pair<String, List<String>>> {
         val instalados = Repositorio.leerInstalados(prefs).filter { it.activo }
+        val porCategoria = nombresModulos.groupBy { n ->
+            instalados.firstOrNull { it.nombre == n }?.categoria ?: "Anime"
+        }
+        val orden = Repositorio.CATEGORIAS.filter { porCategoria.containsKey(it) } +
+            porCategoria.keys.filter { it !in Repositorio.CATEGORIAS }
+        return orden.map { Pair(it, porCategoria[it] ?: emptyList()) }
+    }
+
+    private fun dialogoModulo() {
         val dialogo = AlertDialog.Builder(this).create()
         dialogo.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
 
         val caja = LinearLayout(this)
         caja.orientation = LinearLayout.VERTICAL
-        caja.setPadding(dp(16), dp(24), dp(16), dp(20))
+        caja.setPadding(dp(14), dp(16), dp(14), dp(8))
         caja.background = Ui.fondo(this, Color.parseColor("#262A36"), 28)
 
         val puzzle = TextView(this)
         puzzle.text = "🧩"
-        puzzle.textSize = 34f
+        puzzle.textSize = 22f
         puzzle.gravity = Gravity.CENTER
         caja.addView(puzzle)
 
-        fun elegir(nombre: String?) {
+        fun elegir(nombre: String) {
             dialogo.dismiss()
             if (nombre == moduloSel) return
             moduloSel = nombre
-            pModulo.text = (moduloSel ?: "Todos") + " ▾"
+            prefs.edit().putString("modulo_sel", nombre).apply()
+            pModulo.text = nombre + " ▾"
             // Cada módulo tiene sus propios filtros: se limpia lo que estaba elegido
             seleccion.clear()
             generosSel.clear(); tiposSel.clear(); estadosSel.clear()
@@ -438,37 +454,54 @@ class MainActivity : Activity() {
             if (consulta.isNotEmpty()) iniciarBusqueda() else actualizar()
         }
 
-        caja.addView(
-            filaModulo("Todos los módulos", "", "", moduloSel == null) { elegir(null) }
-        )
-
-        // Los módulos se agrupan por categoría (ANIME, PELÍCULAS...)
-        val porCategoria = nombresModulos.groupBy { n ->
-            instalados.firstOrNull { it.nombre == n }?.categoria ?: "Anime"
-        }
-        val orden = Repositorio.CATEGORIAS.filter { porCategoria.containsKey(it) } +
-            porCategoria.keys.filter { it !in Repositorio.CATEGORIAS }
-        for (cat in orden) {
+        val lista = LinearLayout(this)
+        lista.orientation = LinearLayout.VERTICAL
+        for ((cat, nombres) in ordenModulos()) {
             val cab = TextView(this)
             cab.text = cat.uppercase()
             cab.setTextColor(Color.parseColor("#C7CBE0"))
-            cab.textSize = 15f
+            cab.textSize = 12f
             cab.setTypeface(null, Typeface.BOLD)
             cab.gravity = Gravity.CENTER
-            cab.setPadding(0, dp(18), 0, dp(6))
-            caja.addView(cab)
-            for (n in porCategoria[cat] ?: emptyList()) {
+            cab.setPadding(0, dp(12), 0, dp(4))
+            lista.addView(cab)
+            for (n in nombres) {
                 val m = modulosCargados.firstOrNull { it.nombre == n }
-                caja.addView(
+                lista.addView(
                     filaModulo(n, m?.icono ?: "", m?.version ?: "", moduloSel == n) { elegir(n) }
                 )
             }
         }
 
-        val scroll = ScrollView(this)
-        scroll.addView(caja)
-        dialogo.setView(scroll)
+        val maxAlto = (resources.displayMetrics.heightPixels * 0.55f).toInt()
+        val scroll = object : ScrollView(this) {
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                super.onMeasure(
+                    widthMeasureSpec,
+                    View.MeasureSpec.makeMeasureSpec(maxAlto, View.MeasureSpec.AT_MOST)
+                )
+            }
+        }
+        scroll.addView(lista)
+        caja.addView(scroll)
+
+        val cancelar = TextView(this)
+        cancelar.text = "Cancelar"
+        cancelar.setTextColor(Color.parseColor("#C7D2FE"))
+        cancelar.textSize = 15f
+        cancelar.setTypeface(null, Typeface.BOLD)
+        cancelar.gravity = Gravity.END
+        cancelar.setPadding(dp(12), dp(12), dp(14), dp(8))
+        cancelar.setOnClickListener { dialogo.dismiss() }
+        caja.addView(cancelar)
+
+        dialogo.setView(caja)
         dialogo.show()
+        // Ventana más angosta y compacta
+        dialogo.window?.setLayout(
+            (resources.displayMetrics.widthPixels * 0.82f).toInt(),
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+        )
     }
 
     private fun filaModulo(
@@ -481,42 +514,43 @@ class MainActivity : Activity() {
         val fila = LinearLayout(this)
         fila.orientation = LinearLayout.HORIZONTAL
         fila.gravity = Gravity.CENTER_VERTICAL
-        fila.setPadding(dp(8), dp(8), dp(8), dp(8))
+        fila.setPadding(dp(6), dp(5), dp(6), dp(5))
         fila.setOnClickListener { alTocar() }
 
         // Imagen de la página; si no carga se ve la inicial del nombre
+        val lado = dp(44)
         val marco = FrameLayout(this)
         val inicial = TextView(this)
         inicial.text = nombre.take(1).uppercase()
         inicial.setTextColor(Color.WHITE)
-        inicial.textSize = 24f
+        inicial.textSize = 18f
         inicial.setTypeface(null, Typeface.BOLD)
         inicial.gravity = Gravity.CENTER
-        inicial.background = Ui.fondo(this, Color.parseColor("#3B3654"), 18)
-        marco.addView(inicial, FrameLayout.LayoutParams(dp(60), dp(60)))
+        inicial.background = Ui.fondo(this, Color.parseColor("#3B3654"), 14)
+        marco.addView(inicial, FrameLayout.LayoutParams(lado, lado))
         if (icono.isNotEmpty()) {
             val img = ImageView(this)
             img.scaleType = ImageView.ScaleType.CENTER_CROP
-            Ui.redondear(img, dp(18).toFloat())
-            marco.addView(img, FrameLayout.LayoutParams(dp(60), dp(60)))
+            Ui.redondear(img, dp(14).toFloat())
+            marco.addView(img, FrameLayout.LayoutParams(lado, lado))
             ImageLoader.cargar(icono, img)
         }
-        fila.addView(marco, LinearLayout.LayoutParams(dp(60), dp(60)))
+        fila.addView(marco, LinearLayout.LayoutParams(lado, lado))
 
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
-        col.setPadding(dp(16), 0, 0, 0)
+        col.setPadding(dp(12), 0, 0, 0)
         val tn = TextView(this)
         tn.text = nombre
         tn.setTextColor(if (marcado) Ui.ROSA else Color.parseColor("#E3E5F0"))
-        tn.textSize = 20f
+        tn.textSize = 16f
         tn.setTypeface(null, Typeface.BOLD)
         col.addView(tn)
         if (version.isNotEmpty()) {
             val tv = TextView(this)
             tv.text = version
             tv.setTextColor(Color.parseColor("#9A9DB0"))
-            tv.textSize = 15f
+            tv.textSize = 12f
             tv.setTypeface(null, Typeface.BOLD)
             col.addView(tv)
         }
