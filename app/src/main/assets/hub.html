@@ -77,7 +77,8 @@
           out = {
             name: String(m.name),
             tieneHome: typeof m.home === 'function',
-            tieneSearch: typeof m.search === 'function'
+            tieneSearch: typeof m.search === 'function',
+            tieneGenres: typeof m.genres === 'function'
           };
         } else {
           if (typeof m[metodo] !== 'function') throw new Error('El módulo no define ' + metodo + '()');
