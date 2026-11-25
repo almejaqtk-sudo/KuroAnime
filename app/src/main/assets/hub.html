@@ -97,11 +97,11 @@
             var epUrl = a[0], ep = a[1] || {}, detUrl = a[2];
             var dk = clave + '|' + detUrl;
             var det = detCache[dk];
-            if (!det && detUrl) { det = await m.details(detUrl); detCache[dk] = det; }
+            if (!det && detUrl) { det = await m.details(detUrl); if (det && det.episodes && det.episodes.length) detCache[dk] = det; }
             out = await m.videos(epUrl, { detail: det, episode: ep });
           } else {
             out = await m[metodo].apply(m, a);
-            if (metodo === 'details') detCache[clave + '|' + a[0]] = out;
+            if (metodo === 'details' && out && out.episodes && out.episodes.length) detCache[clave + '|' + a[0]] = out;
           }
         }
         KuroBridge.resultado(id, true, JSON.stringify(out === undefined ? null : out));

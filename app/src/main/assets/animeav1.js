@@ -1,4 +1,4 @@
-// AnimeAV1 (módulo integrado en KuroAnime) - versión 3 (módulo completo: filtros, últimos episodios, horario)
+// AnimeAV1 (módulo integrado en KuroAnime) - versión 4 (episodio 0 para películas, sin Mega, Mp4upload/HLS primero)
 const BASE_URL = 'https://animeav1.com';
 
 /* ---------- FILTROS (los mismos que tiene la web en /catalogo) ---------- */
@@ -42,22 +42,32 @@ const isNotFound = (e) => !!e && (e.status === 404 || /\b404\b/.test(String(e.me
 
 /* ---------- SERVIDORES ---------- */
 const FAST_SERVERS = [
-  { priority: 0, name: 'HLS', match: /zilla-networks/i, type: 'embed' },
-  { priority: 1, name: 'Streamwish', match: /(streamwish|wish|hglink|swiftplayers|alions|filelions|vidhide)/i, type: 'embed' },
-  { priority: 2, name: 'Mp4upload', match: /mp4upload/i, type: 'embed' },
-  { priority: 3, name: 'Okru', match: /(ok\.ru|od\.sdk|okcdn)/i, type: 'embed' },
-  { priority: 4, name: 'YourUpload', match: /yourupload/i, type: 'embed' },
-  { priority: 5, name: 'Filemoon', match: /(filemoon|moonplayer|kerapoxy)/i, type: 'embed' },
-  { priority: 6, name: 'Streamtape', match: /(streamtape|strtape|strcloud)/i, type: 'embed' },
-  { priority: 7, name: 'Doodstream', match: /(dood|ds2play|d0000d|do7go)/i, type: 'embed' },
-  { priority: 8, name: 'Mega', match: /mega\.nz/i, type: 'embed' }
+  { priority: 0, name: 'Mp4upload', match: /mp4upload/i, type: 'embed' },
+  { priority: 1, name: 'HLS', match: /zilla-networks/i, type: 'embed' },
+  { priority: 2, name: 'Streamwish', match: /(streamwish|wishembed|hglink|swiftplayers|alions|filelions|vidhide|dhtpre|hlswish)/i, type: 'embed' },
+  { priority: 3, name: 'UPNShare', match: /(upnshare|upns\.pro|upn\.one|uns\.bio)/i, type: 'embed' },
+  { priority: 4, name: 'Byse', match: /\/\/[a-z0-9.-]*byse[a-z0-9-]*\.[a-z]{2,}/i, type: 'embed' },
+  { priority: 5, name: 'Okru', match: /(ok\.ru|od\.sdk|okcdn)/i, type: 'embed' },
+  { priority: 6, name: 'YourUpload', match: /yourupload/i, type: 'embed' },
+  { priority: 7, name: 'Filemoon', match: /(filemoon|moonplayer|kerapoxy)/i, type: 'embed' },
+  { priority: 8, name: 'Streamtape', match: /(streamtape|strtape|strcloud)/i, type: 'embed' },
+  { priority: 9, name: 'Doodstream', match: /(dood|ds2play|d0000d|do7go)/i, type: 'embed' },
+  { priority: 10, name: 'Voe', match: /\/\/(?:[a-z0-9-]+\.)*voe(?:-[a-z0-9-]+)?\.[a-z]{2,}\//i, type: 'embed' }
 ];
+
+// Si el host no se reconoce, se usa el nombre que la web le pone al servidor (si está en esta lista)
+const NAMED_SERVERS = {
+  mp4upload: 0, hls: 1, streamwish: 2, upnshare: 3, byse: 4, okru: 5, yourupload: 6,
+  filemoon: 7, streamtape: 8, doodstream: 9, voe: 10
+};
 
 const BLOCKED_SERVERS = [
-  /(fembed|feurl|fe\.|ncdn|streamango|openload|rapidvideo|verystream|clipwatching|jetload|mixdrop|upstream|voe|uqload|sbplay|sbembed|streamsb|embedrise|animeav1\.com\/(assets|static|img|js|css))/i
+  // Mega no carga en la app: fuera
+  /(mega\.nz|mega\.io|mega\.co\.nz)/i,
+  /(fembed|feurl|\/\/fe\.|ncdn|streamango|openload|rapidvideo|verystream|clipwatching|jetload|mixdrop|upstream|uqload|sbplay|sbembed|streamsb|embedrise|animeav1\.com\/(assets|static|img|js|css))/i
 ];
 
-function classifyFastServer(rawUrl) {
+function classifyFastServer(rawUrl, nameHint) {
   const url = String(rawUrl || '').trim();
   if (!url || !/^https?:\/\//i.test(url)) return null;
 
@@ -77,11 +87,20 @@ function classifyFastServer(rawUrl) {
   }
 
   if (/\.m3u8(\?|$)/i.test(url)) {
-    return { priority: 0, label: 'HLS Rápido', url, type: 'hls' };
+    return { priority: 1, label: 'HLS Rápido', url, type: 'hls' };
   }
 
   if (/\.mp4(\?|$)/i.test(url) && !/(thumb|poster|preview|cover|ads|promo|sample)/i.test(url)) {
-    return { priority: 1, label: 'MP4 Rápido', url, type: 'mp4' };
+    return { priority: 0, label: 'MP4 Rápido', url, type: 'mp4' };
+  }
+
+  // Host desconocido pero la web lo llama con un nombre conocido (UPNShare, Byse, Voe...)
+  const hint = String(nameHint || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (hint && Object.prototype.hasOwnProperty.call(NAMED_SERVERS, hint) && !/\.(js|css|png|jpe?g|gif|webp|svg|ico|woff2?)(\?|$)/i.test(url)) {
+    const nm = Object.keys(NAMED_SERVERS).find((k) => k === hint);
+    const label = { mp4upload: 'Mp4upload', hls: 'HLS', streamwish: 'Streamwish', upnshare: 'UPNShare', byse: 'Byse', okru: 'Okru',
+      yourupload: 'YourUpload', filemoon: 'Filemoon', streamtape: 'Streamtape', doodstream: 'Doodstream', voe: 'Voe' }[nm];
+    return { priority: NAMED_SERVERS[nm], label, url, type: hint === 'hls' && /\.m3u8/i.test(url) ? 'hls' : 'embed' };
   }
 
   return null;
@@ -207,7 +226,7 @@ function extractEpisodes(doc, htmlText, animeUrl) {
 
   const addEpisode = (number, title, epUrl) => {
     const num = Number(number);
-    if (!Number.isFinite(num) || num <= 0) return;
+    if (!Number.isFinite(num) || num < 0) return; // el episodio 0 existe (películas, especiales)
     const cleanUrl = epUrl ? api.abs(epUrl, animeUrl) : `${animeUrl.replace(/\/+$/, '')}/episodio-${num}`;
     if (seenUrls.has(cleanUrl) && seenNumbers.has(num)) return;
     seenUrls.add(cleanUrl);
@@ -267,6 +286,16 @@ function extractEpisodes(doc, htmlText, animeUrl) {
         txt || `Episodio ${numMatch[1]}`,
         hrefAttr || undefined
       );
+    }
+  }
+
+  // Pasada directa: cualquier /media/<slug>/<n> que aparezca en el HTML (incluye el episodio 0 de las películas)
+  if (episodes.length === 0 && htmlText && animeSlug) {
+    const esc = animeSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('/media/' + esc + '/(\\d+(?:\\.\\d+)?)(?![\\d.])', 'g');
+    let mm;
+    while ((mm = re.exec(htmlText.replace(/\\\//g, '/')))) {
+      addEpisode(mm[1], `Episodio ${mm[1]}`, `${animeUrl.replace(/\/+$/, '')}/${mm[1]}`);
     }
   }
 
@@ -528,7 +557,7 @@ async function discoverEndpoints(html, doc, pageUrl) {
 return {
   id: 'animeav1',
   name: 'AnimeAV1',
-  version: 7,
+  version: 8,
   baseUrl: BASE_URL,
 
   filters: FILTERS,
@@ -715,7 +744,18 @@ return {
       status = 'Finalizado';
     }
 
-    const episodes = extractEpisodes(doc, htmlText, absUrl);
+    let episodes = extractEpisodes(doc, htmlText, absUrl);
+
+    // Último recurso: la ficha no enseña la lista pero la página del episodio existe (películas, OVAs, especiales)
+    if (episodes.length === 0) {
+      const base = absUrl.replace(/\/+$/, '');
+      for (const n of [0, 1]) {
+        try {
+          await api.text(`${base}/${n}`);
+          episodes.push({ number: n, title: `Episodio ${n}`, url: `${base}/${n}` });
+        } catch (_) { /* no existe */ }
+      }
+    }
 
     return {
       title,
@@ -737,7 +777,7 @@ return {
     const found = [];
     const seen = new Set();
 
-    const addSource = (rawUrl, langHint = '') => {
+    const addSource = (rawUrl, langHint = '', nameHint = '') => {
       if (!rawUrl) return;
       const cleaned = String(rawUrl)
         .replace(/\\\//g, '/')
@@ -757,7 +797,7 @@ return {
       }
       seen.add(full);
 
-      const classified = classifyFastServer(full);
+      const classified = classifyFastServer(full, nameHint);
       if (classified) {
         classified.lang = langHint;
         found.push(classified);
@@ -803,7 +843,10 @@ return {
     const urlRe = /https?:\/\/[^\s"'<>\\]+/gi;
     let um;
     while ((um = urlRe.exec(unescaped))) {
-      addSource(um[0], langAt(um.index));
+      // nombre del servidor que la web guarda junto a la URL: "server":"UPNShare","url":"..."
+      const around = unescaped.slice(Math.max(0, um.index - 140), um.index + um[0].length + 140);
+      const nm = around.match(/["'](?:server|name|label|title|provider)["']\s*:\s*["']([^"']{2,24})["']/i);
+      addSource(um[0], langAt(um.index), nm ? nm[1] : '');
     }
 
     found.sort((a, b) => a.priority - b.priority);
