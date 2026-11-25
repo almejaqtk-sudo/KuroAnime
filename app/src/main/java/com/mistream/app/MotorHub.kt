@@ -128,16 +128,17 @@ object MotorHub {
     private fun itemsDeTexto(texto: String, nombre: String, codigo: String): List<Item> {
         val arr = JSONArray(texto)
         val items = mutableListOf<Item>()
+        val vistos = mutableSetOf<String>()
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
             val titulo = o.optString("title", "")
             val url = o.optString("url", "")
-            if (titulo.isEmpty() || url.isEmpty()) continue
+            if (titulo.isEmpty() || url.isEmpty() || !vistos.add(url)) continue
             val j = JSONObject()
             j.put("titulo", titulo)
             j.put("portada", o.optString("cover", ""))
             j.put("id", url)
-            j.put("ultimo", o.optString("sub", ""))
+            j.put("ultimo", o.optString("sub", "").ifEmpty { o.optString("note", "") })
             j.put("tipo", o.optString("type", ""))
             j.put("estado", o.optString("status", ""))
             o.optJSONArray("genres")?.let { j.put("generos", it) }
@@ -151,7 +152,19 @@ object MotorHub {
         val clave = claveDe(codigo)
         val inf = info(codigo)
         val nombre = inf.optString("name", "Módulo")
-        val texto = if (inf.optBoolean("tieneHome")) {
+        // "Últimos episodios": si el módulo tiene latest() se usa; si falla o viene vacío, el catálogo
+        var recientes = ""
+        if (inf.optBoolean("tieneLatest")) {
+            try {
+                val t = llamar(clave, codigo, "latest", "[]")
+                if (JSONArray(t).length() > 0) recientes = t
+            } catch (e: Exception) {
+                // se usa el catálogo
+            }
+        }
+        val texto: String = if (recientes.isNotEmpty()) {
+            recientes
+        } else if (inf.optBoolean("tieneHome")) {
             llamar(clave, codigo, "home", "[1]")
         } else {
             llamar(clave, codigo, "search", "[\"\",1,{}]")
@@ -165,17 +178,18 @@ object MotorHub {
                 val fa = JSONArray(llamar(clave, codigo, "filters", "[]"))
                 for (i in 0 until fa.length()) {
                     val f = fa.optJSONObject(i) ?: continue
-                    val key = f.optString("key", "")
+                    val key = f.optString("key", "").ifEmpty { f.optString("id", "") }
                     val oa = f.optJSONArray("options") ?: continue
                     val ops = mutableListOf<Pair<String, String>>()
                     for (k in 0 until oa.length()) {
                         val o = oa.optJSONObject(k) ?: continue
-                        val n = o.optString("name", "")
-                        val gid = o.optString("id", n)
+                        val n = o.optString("name", "").ifEmpty { o.optString("t", "") }
+                        val gid = o.optString("id", "").ifEmpty { o.optString("v", n) }
                         if (n.isNotEmpty() && gid.isNotEmpty()) ops.add(Pair(n, gid))
                     }
                     if (key.isNotEmpty() && ops.isNotEmpty()) {
-                        filtros.add(Filtro(key, f.optString("name", key), ops))
+                        val nf = f.optString("name", "").ifEmpty { f.optString("label", key) }
+                        filtros.add(Filtro(key, nf, ops))
                     }
                 }
             }
@@ -213,19 +227,32 @@ object MotorHub {
     }
 
     // Una página del catálogo con los filtros elegidos (genre, category, status...). Los filtra el sitio.
+    // Con filtros se usa search("", página, filtros); si el módulo no devuelve nada así, se prueba home().
     fun catalogo(codigo: String, filtros: Map<String, String>, pagina: Int): List<Item> {
         val clave = claveDe(codigo)
         val inf = info(codigo)
         val nombre = inf.optString("name", "Módulo")
-        val args = JSONArray()
-        val metodo = if (inf.optBoolean("tieneHome")) {
-            args.put(pagina).put(filtrosJson(filtros))
-            "home"
-        } else {
-            args.put("").put(pagina).put(filtrosJson(filtros))
-            "search"
+        val tieneHome = inf.optBoolean("tieneHome")
+        val tieneSearch = inf.optBoolean("tieneSearch")
+
+        fun porSearch(): List<Item> {
+            val args = JSONArray().put("").put(pagina).put(filtrosJson(filtros))
+            return itemsDeTexto(llamar(clave, codigo, "search", args.toString()), nombre, codigo)
         }
-        return itemsDeTexto(llamar(clave, codigo, metodo, args.toString()), nombre, codigo)
+
+        fun porHome(): List<Item> {
+            val args = JSONArray().put(pagina).put(filtrosJson(filtros))
+            return itemsDeTexto(llamar(clave, codigo, "home", args.toString()), nombre, codigo)
+        }
+
+        return when {
+            filtros.isNotEmpty() && tieneSearch -> {
+                val r = try { porSearch() } catch (e: Exception) { if (tieneHome) emptyList() else throw e }
+                if (r.isEmpty() && tieneHome) porHome() else r
+            }
+            tieneHome -> porHome()
+            else -> porSearch()
+        }
     }
 
     // Búsqueda por nombre en el sitio. Devuelve null si el módulo no sabe buscar.
@@ -330,6 +357,8 @@ object MotorHub {
                     .containsMatchIn(url)) continue
 
             var tipo = v.optString("type", "").lowercase()
+            // Los que se abren en el navegador ya no se usan: solo directos y web (embed)
+            if (tipo == "external" || tipo == "browser" || tipo == "navegador") continue
             if (tipo.isEmpty()) {
                 tipo = when {
                     url.contains(".m3u8", true) -> "hls"
@@ -363,10 +392,10 @@ object MotorHub {
             val etiqueta = v.optString("label", "").ifEmpty { "Servidor ${i + 1}" }
             val idioma = Servidores.normalizarIdioma(v.optString("lang", ""), etiqueta)
             val enlace = ServerLink(etiqueta, url, tipo, headers, subs, idioma)
-            if (tipo == "embed" || tipo == "external") web.add(enlace) else buenos.add(enlace)
+            if (tipo == "embed") web.add(enlace) else buenos.add(enlace)
         }
         // Solo se muestran los servidores que responden (los caídos se descartan)
-        return Servidores.filtrarFuncionales((buenos + web).take(16)).take(12)
+        return Servidores.filtrarFuncionales((buenos + web).take(20)).take(14)
     }
 }
 

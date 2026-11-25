@@ -470,7 +470,11 @@ class DetalleActivity : Activity() {
             runOnUiThread {
                 espera.dismiss()
                 if (isFinishing || mi != busquedaServidores) return@runOnUiThread
-                mostrarSelector(indice, buenos)
+                if (buenos.isEmpty()) {
+                    Toast.makeText(this, "No hay servidores funcionando para este episodio", Toast.LENGTH_LONG).show()
+                } else {
+                    mostrarSelector(indice, buenos)
+                }
             }
         }.start()
     }
@@ -480,7 +484,7 @@ class DetalleActivity : Activity() {
         Servidores.mostrarSelector(
             this, "Elegir servidor", servidores, prefs.getString("srv_pref", null),
             { which ->
-                prefs.edit().putString("srv_pref", Servidores.clave(servidores[which])).apply()
+                prefs.edit().putString("srv_pref", Servidores.claveVisible(servidores, which)).apply()
                 abrirReproductor(indice)
             }
         )

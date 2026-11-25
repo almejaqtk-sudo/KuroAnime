@@ -134,6 +134,7 @@ class PlayerActivity : Activity() {
         raiz.setBackgroundColor(Color.BLACK)
         vistaExo = PlayerView(this)
         vistaExo.resizeMode = modosEscala[idxEscala]
+        vistaExo.controllerHideOnTouch = true
         raiz.addView(vistaExo)
 
         // Volver: círculo oscuro arriba a la izquierda
@@ -322,6 +323,17 @@ class PlayerActivity : Activity() {
         bEscala.text = "Escala: " + nombresEscala[idxEscala]
     }
 
+    // Primer toque: salen los botones. Segundo toque: se esconden.
+    private fun alternarBarraWeb() {
+        if (barraWebVisible) {
+            barra.removeCallbacks(ocultadorBarra)
+            barraWebVisible = false
+            actualizarBarra()
+        } else {
+            mostrarBarraWeb()
+        }
+    }
+
     // En servidores web los botones salen al tocar la pantalla y se ocultan solos
     private fun mostrarBarraWeb() {
         barraWebVisible = true
@@ -436,12 +448,31 @@ class PlayerActivity : Activity() {
             resolverHub(servidores[0], i)
             return
         }
-        // Módulos con varios servidores: primero el que elegiste
-        val pref = prefs.getString("srv_pref", null)
-        listaServidores = servidores.sortedBy { if (Servidores.clave(it) == pref) 0 else 1 }
-        reproduciendo = true
-        actualizarBarra()
-        usarServidor(0)
+        // Módulos con varios servidores: se descartan los de navegador, los caídos y los de relleno,
+        // y primero va el que elegiste
+        val sinNavegador = servidores.filter { it.tipo != "external" }
+        if (sinNavegador.isEmpty()) {
+            Toast.makeText(this, "Sin servidores", Toast.LENGTH_LONG).show()
+            actualizarBarra()
+            return
+        }
+        Thread {
+            val buenos = if (sinNavegador.size > 1) Servidores.filtrarFuncionales(sinNavegador) else sinNavegador
+            runOnUiThread {
+                if (isFinishing || indiceEp != i) return@runOnUiThread
+                if (buenos.isEmpty()) {
+                    Toast.makeText(this, "Sin servidores funcionando", Toast.LENGTH_LONG).show()
+                    actualizarBarra()
+                    return@runOnUiThread
+                }
+                val pref = prefs.getString("srv_pref", null)
+                val ini = Servidores.indiceDePref(buenos, pref)
+                listaServidores = if (ini > 0) listOf(buenos[ini]) + buenos.filterIndexed { k, _ -> k != ini } else buenos
+                reproduciendo = true
+                actualizarBarra()
+                usarServidor(0)
+            }
+        }.start()
     }
 
     // Mientras ves un episodio, deja listos los servidores del siguiente
@@ -474,7 +505,7 @@ class PlayerActivity : Activity() {
                     }
                     // Si ya elegiste un servidor antes y este episodio lo tiene, se usa solo
                     val pref = prefs.getString("srv_pref", null)
-                    var idx = lista.indexOfFirst { Servidores.clave(it) == pref }
+                    var idx = Servidores.indiceDePref(lista, pref)
                     if (idx < 0 && pref != null) {
                         // Ese servidor no está en este episodio: se busca otro del mismo idioma
                         val idioma = pref.substringAfterLast("|", "")
@@ -514,7 +545,7 @@ class PlayerActivity : Activity() {
         Servidores.mostrarSelector(
             this, "Elegir servidor", listaServidores, prefs.getString("srv_pref", null),
             { which ->
-                prefs.edit().putString("srv_pref", Servidores.clave(listaServidores[which])).apply()
+                prefs.edit().putString("srv_pref", Servidores.claveVisible(listaServidores, which)).apply()
                 usarServidor(which)
             },
             { if (!reproduciendo) finish() }
@@ -529,11 +560,8 @@ class PlayerActivity : Activity() {
                 val webs = listaServidores.filter { it.tipo == "embed" }
                 mostrarWeb(webs.filter { it === elegido } + webs.filter { it !== elegido })
             }
-            "external" -> {
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(elegido.url)))
-            }
             else -> {
-                val propios = listaServidores.filter { it.tipo != "embed" && it.tipo != "external" }
+                val propios = listaServidores.filter { it.tipo != "embed" }
                 servidores = propios.filter { it === elegido } + propios.filter { it !== elegido }
                 indiceServ = 0
                 reproduciendo = true
@@ -570,7 +598,7 @@ class PlayerActivity : Activity() {
 
         // Un toque en la pantalla muestra los botones (y el toque sigue llegando al reproductor)
         w.setOnTouchListener { _, ev ->
-            if (ev.action == MotionEvent.ACTION_UP) mostrarBarraWeb()
+            if (ev.action == MotionEvent.ACTION_UP) alternarBarraWeb()
             false
         }
 

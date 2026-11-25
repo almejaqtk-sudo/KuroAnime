@@ -35,7 +35,7 @@ object Repositorio {
     }
 
     // ---- Módulo AnimeAV1 integrado en la app ----
-    private const val VERSION_INTEGRADO = 2
+    private const val VERSION_INTEGRADO = 3
     private const val MARCA_INTEGRADO = "// AnimeAV1 (módulo integrado en KuroAnime)"
 
     // Instala (o actualiza) el módulo AnimeAV1 que viene dentro de la app y lo deja de primero.
