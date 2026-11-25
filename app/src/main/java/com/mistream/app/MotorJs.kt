@@ -127,6 +127,19 @@ function log(x) { __log(String(x)); }
         Modulo(nombre, items)
     }
 
+    // Pide páginas anteriores a módulos JavaScript que implementan home(página).
+    fun home(codigo: String, pagina: Int): List<Item> = conMotor { cx, scope ->
+        val nombre = prepararModulo(cx, scope, codigo)
+        val tieneHome = evaluar(cx, scope, "typeof modulo.home === 'function' ? 'si' : 'no'")
+        if (tieneHome != "si") return@conMotor emptyList<Item>()
+        val texto = evaluar(cx, scope, "JSON.stringify(modulo.home(" + pagina.coerceAtLeast(1) + "))")
+        if (texto == "undefined" || texto == "null") return@conMotor emptyList<Item>()
+        val arr = JSONArray(texto)
+        val items = mutableListOf<Item>()
+        for (i in 0 until arr.length()) items.add(ModuloParser.itemDeObjeto(arr.getJSONObject(i), nombre, codigo))
+        items
+    }
+
     // Llama a modulo.episodios(id) cuando abres un título
     fun episodios(codigo: String, id: String): List<Episodio> = conMotor { cx, scope ->
         prepararModulo(cx, scope, codigo)

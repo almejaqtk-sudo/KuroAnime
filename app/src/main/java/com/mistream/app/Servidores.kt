@@ -258,7 +258,8 @@ object Servidores {
         "file not found", "video not found", "file was deleted", "file is no longer available",
         "has been removed", "has been deleted", "video no existe", "archivo no existe", "no encontrado",
         "no longer exists", "does not exist", "video unavailable", "video is unavailable",
-        "video not available", "no disponible", "ya no está disponible", "was removed", "file removed"
+        "video not available", "no disponible", "ya no está disponible", "was removed", "file removed",
+        "failed to load video", "please refresh", "error loading video", "cannot load video"
     )
 
     private fun abrir(url: String, headers: Map<String, String>, rango: String? = null): HttpURLConnection {
@@ -379,7 +380,9 @@ object Servidores {
             con.disconnect()
         }
         val cuerpo = crudo.lowercase()
-        if (cuerpo.length < 3000 && marcasError.any { cuerpo.contains(it) }) return Estado.MALO
+        // Mensajes explícitos del reproductor (incluido "Failed to load video") indican
+        // que el embed no sirve aunque la página responda HTTP 200 y tenga mucho HTML.
+        if (marcasError.any { cuerpo.contains(it) }) return Estado.MALO
         val dur = duracionDeclarada(cuerpo)
         if (dur != null && dur > 0 && dur < MIN_SEGUNDOS) return Estado.CORTO
 

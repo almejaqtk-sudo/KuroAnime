@@ -38,6 +38,7 @@ class MainActivity : Activity() {
     private lateinit var buscador: EditText
     private lateinit var titulo: TextView
     private lateinit var grilla: GridView
+    private lateinit var btnCargarMas: TextView
     private lateinit var pModulo: TextView
     private val pestanas = mutableListOf<TextView>()
 
@@ -48,6 +49,10 @@ class MainActivity : Activity() {
     private var visibles: List<Item> = emptyList()
     private var versionCargada = -1
     private var modulosCargados: List<Modulo> = emptyList()
+    private var paginaInicio = 2
+    private var cargandoInicio = false
+    private var finInicio = false
+    private var tokenInicio = 0
 
     // Filtros locales (solo si ningún módulo trae los filtros de su sitio): Género / Tipo / Estado
     private val generosSel = mutableSetOf<String>()
@@ -189,6 +194,20 @@ class MainActivity : Activity() {
             )
         )
 
+        btnCargarMas = TextView(this)
+        btnCargarMas.text = "Cargar más"
+        btnCargarMas.gravity = Gravity.CENTER
+        btnCargarMas.textSize = 18f
+        btnCargarMas.setTypeface(null, Typeface.BOLD)
+        btnCargarMas.setTextColor(Color.WHITE)
+        btnCargarMas.background = Ui.fondo(this, Color.parseColor("#29263F"), 22)
+        btnCargarMas.setPadding(dp(12), dp(16), dp(12), dp(16))
+        val lpMas = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        lpMas.topMargin = dp(10)
+        lpMas.bottomMargin = dp(10)
+        contenido.addView(btnCargarMas, lpMas)
+        btnCargarMas.setOnClickListener { cargarMasInicio() }
+
         // Barra inferior
         val barra = LinearLayout(this)
         barra.orientation = LinearLayout.HORIZONTAL
@@ -316,6 +335,10 @@ class MainActivity : Activity() {
     private fun aplicarResultado(r: Repositorio.Resultado) {
         modulosCargados = r.modulos
         todos = r.modulos.flatMap { it.items }
+        paginaInicio = 2
+        cargandoInicio = false
+        finInicio = false
+        tokenInicio++
         nombresModulos = r.modulos.map { it.nombre }.distinct()
         // Siempre hay un módulo elegido: el último que usaste o, si no hay, el primero de la lista
         val sel = moduloSel
@@ -401,12 +424,58 @@ class MainActivity : Activity() {
         scrollFiltros.visibility =
             if (pestana == 0 && filtros.childCount > 0) View.VISIBLE else View.GONE
         buscador.visibility = if (pestana == 1) View.VISIBLE else View.GONE
+        btnCargarMas.visibility = if (pestana == 0 && seleccion.isEmpty() && moduloSel != null && !finInicio) View.VISIBLE else View.GONE
+        btnCargarMas.isEnabled = !cargandoInicio
+        btnCargarMas.text = if (cargandoInicio) "Cargando..." else "Cargar más"
 
         grilla.adapter = AdaptadorGrilla(visibles)
 
         for ((i, t) in pestanas.withIndex()) {
             t.setTextColor(if (i == pestana) Ui.ROSA else Ui.GRIS)
         }
+    }
+
+    private fun cargarMasInicio() {
+        if (cargandoInicio || finInicio || pestana != 0 || seleccion.isNotEmpty()) return
+        val modulo = modulosCargados.firstOrNull { it.nombre == moduloSel } ?: return
+        if (modulo.fuente.isBlank()) {
+            Toast.makeText(this, "Este módulo no admite cargar más páginas", Toast.LENGTH_SHORT).show()
+            finInicio = true
+            actualizar()
+            return
+        }
+        cargandoInicio = true
+        val pagina = paginaInicio
+        val token = ++tokenInicio
+        actualizar()
+        Thread {
+            var error: String? = null
+            val nuevos = try {
+                if (MotorHub.esFormatoHub(modulo.fuente)) MotorHub.catalogo(modulo.fuente, emptyMap(), pagina)
+                else MotorJs.home(modulo.fuente, pagina)
+            } catch (e: Exception) {
+                error = e.message ?: "Error de red"
+                emptyList()
+            }
+            val mensajeError = error
+            runOnUiThread {
+                if (token != tokenInicio) return@runOnUiThread
+                cargandoInicio = false
+                val existentes = todos.map { (if (it.id.isNotBlank()) it.id else it.titulo) + "|" + it.titulo }.toSet()
+                val unicos = nuevos.filter { ((if (it.id.isNotBlank()) it.id else it.titulo) + "|" + it.titulo) !in existentes }
+                if (mensajeError != null) {
+                    Toast.makeText(this, "No se pudo cargar la página: $mensajeError", Toast.LENGTH_LONG).show()
+                } else if (unicos.isEmpty()) {
+                    finInicio = true
+                    Toast.makeText(this, "No hay más animes anteriores", Toast.LENGTH_SHORT).show()
+                } else {
+                    todos = todos + unicos
+                    paginaInicio = pagina + 1
+                    Repositorio.agregarARegistro(unicos)
+                }
+                actualizar()
+            }
+        }.start()
     }
 
     // ---------- Selector de módulo (con la imagen de cada página) ----------
@@ -447,6 +516,10 @@ class MainActivity : Activity() {
             seleccion.clear()
             generosSel.clear(); tiposSel.clear(); estadosSel.clear()
             tokenFiltro++
+            tokenInicio++
+            paginaInicio = 2
+            cargandoInicio = false
+            finInicio = false
             itemsFiltro = emptyList()
             cargandoFiltro = false
             finFiltro = false
