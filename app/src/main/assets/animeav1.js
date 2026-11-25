@@ -3,7 +3,7 @@
 const BASE = 'https://animeav1.com';
 const H = { 'Accept-Language': 'es-ES,es;q=0.9' };
 
-// Se usa solo si la página no deja leer la lista de géneros
+// Respaldo: se usa solo si la página no deja leer sus filtros. Lo normal es leerlos del propio sitio.
 const GENEROS_BASE = [
   ['Acción', 'accion'], ['Aventuras', 'aventuras'], ['Ciencia Ficción', 'ciencia-ficcion'],
   ['Comedia', 'comedia'], ['Deportes', 'deportes'], ['Drama', 'drama'], ['Ecchi', 'ecchi'],
@@ -14,6 +14,13 @@ const GENEROS_BASE = [
   ['Sobrenatural', 'sobrenatural'], ['Superpoderes', 'superpoderes'], ['Suspenso', 'suspenso'],
   ['Terror', 'terror'], ['Vampiros', 'vampiros']
 ].map((g) => ({ name: g[0], id: g[1] }));
+
+const NOMBRES_FILTRO = {
+  genre: 'Género', category: 'Tipo', type: 'Tipo', year: 'Año', status: 'Estado',
+  order: 'Ordenar por', sort: 'Ordenar por'
+};
+// Parámetros que no son filtros de verdad
+const NO_FILTRO = { search: 1, q: 1, query: 1, page: 1, letter: 1, letra: 1 };
 
 const limpiar = (t) => String(t || '').replace(/\s+/g, ' ').trim();
 const ruta = (href) => String(href || '').replace(/^https?:\/\/[^\/]+/, '').split('#')[0].split('?')[0];
@@ -48,51 +55,109 @@ function parseLista(doc) {
   return orden.filter((x) => x.title);
 }
 
+// Convierte los filtros elegidos en la app ({ genre: 'accion', status: 'emision' }) en parámetros de la URL
+function paramsFiltros(filters) {
+  const q = [];
+  Object.keys(filters || {}).forEach((k) => {
+    if (filters[k] !== undefined && filters[k] !== null && filters[k] !== '') {
+      q.push(encodeURIComponent(k) + '=' + encodeURIComponent(filters[k]));
+    }
+  });
+  return q;
+}
+
+const normal = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+
 return {
   id: 'animeav1',
   name: 'AnimeAV1',
-  version: 1,
+  version: '1.1.0',
+  baseUrl: BASE, // la app saca de aquí el icono de la página
 
-  // Catálogo. filters.genre = slug del género (por ejemplo "comedia")
+  // Catálogo. filters = { genre, category, status, year, order } según lo que tenga el sitio
   async home(page, filters) {
     const q = [];
     if (page && page > 1) q.push('page=' + page);
-    if (filters && filters.genre) q.push('genre=' + encodeURIComponent(filters.genre));
+    paramsFiltros(filters).forEach((x) => q.push(x));
     const doc = await api.html(BASE + '/catalogo' + (q.length ? '?' + q.join('&') : ''), { headers: H });
     return parseLista(doc);
   },
 
+  // Búsqueda por nombre. Prueba los nombres de parámetro que usa el sitio y se queda con el que
+  // de verdad filtra (si el sitio ignora el parámetro devuelve el catálogo normal y se descarta).
   async search(query, page, filters) {
-    const q = ['page=' + (page || 1)];
-    if (query) q.push('search=' + encodeURIComponent(query));
-    if (filters && filters.genre) q.push('genre=' + encodeURIComponent(filters.genre));
-    const doc = await api.html(BASE + '/catalogo?' + q.join('&'), { headers: H });
-    return parseLista(doc);
+    const pag = page || 1;
+    const extra = paramsFiltros(filters);
+    if (!query) return this.home(pag, filters);
+    let normalDoc = null;
+    for (const nombre of ['search', 'q', 'query']) {
+      const q = [nombre + '=' + encodeURIComponent(query), 'page=' + pag].concat(extra);
+      const items = parseLista(await api.html(BASE + '/catalogo?' + q.join('&'), { headers: H }));
+      if (!items.length) continue;
+      if (!normalDoc) {
+        normalDoc = parseLista(await api.html(BASE + '/catalogo?page=' + pag, { headers: H }));
+      }
+      const igual = items.slice(0, 5).every((x, i) => normalDoc[i] && normalDoc[i].url === x.url);
+      if (!igual) return items;
+    }
+    return [];
   },
 
-  // Lista de géneros del sitio: [{ name, id }]
-  async genres() {
+  // Todos los filtros que tiene el sitio: [{ key, name, options: [{ name, id }] }]
+  async filters() {
+    const grupos = {};
+    const orden = [];
+    const poner = (clave, nombre, valor) => {
+      const base = clave.replace(/\[\]$/, '');
+      if (NO_FILTRO[base] || !valor) return;
+      if (!grupos[clave]) { grupos[clave] = { key: clave, name: NOMBRES_FILTRO[base] || (base.charAt(0).toUpperCase() + base.slice(1)), options: [], vistos: {} }; orden.push(clave); }
+      const g = grupos[clave];
+      if (g.vistos[valor]) return;
+      g.vistos[valor] = true;
+      g.options.push({ name: limpiar(nombre) || valor, id: valor });
+    };
     try {
       const doc = await api.html(BASE + '/catalogo', { headers: H });
-      const hallados = {};
-      doc.querySelectorAll('input[name^="genre"]').forEach((i) => {
-        const v = i.getAttribute('value');
-        if (!v) return;
+      doc.querySelectorAll('input[name]').forEach((i) => {
+        const t = (i.getAttribute('type') || '').toLowerCase();
+        if (t !== 'radio' && t !== 'checkbox') return;
         const l = i.closest('label');
-        hallados[v] = limpiar(l ? l.textContent : '') || v;
+        poner(i.getAttribute('name'), l ? l.textContent : (i.getAttribute('aria-label') || ''), i.getAttribute('value'));
       });
-      doc.querySelectorAll('select[name^="genre"] option').forEach((o) => {
-        const v = o.getAttribute('value');
-        if (v) hallados[v] = limpiar(o.textContent) || v;
+      doc.querySelectorAll('select[name]').forEach((s) => {
+        s.querySelectorAll('option').forEach((o) => poner(s.getAttribute('name'), o.textContent, o.getAttribute('value')));
       });
-      doc.querySelectorAll('a[href*="genre="]').forEach((a) => {
-        const m = String(a.getAttribute('href') || '').match(/[?&]genre=([^&#]+)/);
-        if (m) hallados[decodeURIComponent(m[1])] = limpiar(a.textContent) || m[1];
+      doc.querySelectorAll('a[href*="catalogo?"]').forEach((a) => {
+        const href = String(a.getAttribute('href') || '');
+        const m = href.match(/[?&]([a-zA-Z_\[\]]+)=([^&#]+)/);
+        if (m && /^(genre|category|status|year|type|order)(\[\])?$/.test(m[1])) {
+          poner(m[1], a.textContent, decodeURIComponent(m[2]));
+        }
       });
-      const ids = Object.keys(hallados);
-      if (ids.length >= 5) return ids.map((k) => ({ name: hallados[k], id: k }));
     } catch (e) {}
-    return GENEROS_BASE;
+    const res = orden.map((k) => grupos[k]).filter((g) => g.options.length >= 2)
+      .map((g) => ({ key: g.key, name: g.name, options: g.options }));
+    const tiene = (k) => res.some((g) => g.key.replace(/\[\]$/, '') === k);
+    // Lo que el sitio no dejó leer se completa con valores de respaldo
+    if (!tiene('genre')) res.unshift({ key: 'genre', name: 'Género', options: GENEROS_BASE });
+    if (!tiene('category') && !tiene('type')) {
+      res.push({ key: 'category', name: 'Tipo', options: [
+        { name: 'TV Anime', id: 'tv-anime' }, { name: 'Película', id: 'pelicula' },
+        { name: 'OVA', id: 'ova' }, { name: 'ONA', id: 'ona' }, { name: 'Especial', id: 'especial' }
+      ] });
+    }
+    if (!tiene('status')) {
+      res.push({ key: 'status', name: 'Estado', options: [
+        { name: 'En emisión', id: 'emision' }, { name: 'Finalizado', id: 'finalizado' }
+      ] });
+    }
+    return res;
+  },
+
+  // Se mantiene por compatibilidad con versiones anteriores de la app
+  async genres() {
+    const f = (await this.filters()).filter((g) => g.key === 'genre')[0];
+    return f ? f.options : GENEROS_BASE;
   },
 
   async details(slug) {

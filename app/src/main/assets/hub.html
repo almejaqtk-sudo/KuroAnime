@@ -78,7 +78,11 @@
             name: String(m.name),
             tieneHome: typeof m.home === 'function',
             tieneSearch: typeof m.search === 'function',
-            tieneGenres: typeof m.genres === 'function'
+            tieneGenres: typeof m.genres === 'function',
+            tieneFilters: typeof m.filters === 'function',
+            icon: m.icon ? String(m.icon) : '',
+            baseUrl: m.baseUrl ? String(m.baseUrl) : '',
+            version: m.version != null ? String(m.version) : ''
           };
         } else {
           if (typeof m[metodo] !== 'function') throw new Error('El módulo no define ' + metodo + '()');
