@@ -45,25 +45,26 @@ const FAST_SERVERS = [
   { priority: 0, name: 'Mp4upload', match: /mp4upload/i, type: 'embed' },
   { priority: 1, name: 'HLS', match: /zilla-networks/i, type: 'embed' },
   { priority: 2, name: 'Streamwish', match: /(streamwish|wishembed|hglink|swiftplayers|alions|filelions|vidhide|dhtpre|hlswish)/i, type: 'embed' },
-  { priority: 3, name: 'UPNShare', match: /(upnshare|upns\.pro|upn\.one|uns\.bio)/i, type: 'embed' },
-  { priority: 4, name: 'Byse', match: /\/\/[a-z0-9.-]*byse[a-z0-9-]*\.[a-z]{2,}/i, type: 'embed' },
   { priority: 5, name: 'Okru', match: /(ok\.ru|od\.sdk|okcdn)/i, type: 'embed' },
   { priority: 6, name: 'YourUpload', match: /yourupload/i, type: 'embed' },
   { priority: 7, name: 'Filemoon', match: /(filemoon|moonplayer|kerapoxy)/i, type: 'embed' },
   { priority: 8, name: 'Streamtape', match: /(streamtape|strtape|strcloud)/i, type: 'embed' },
-  { priority: 9, name: 'Doodstream', match: /(dood|ds2play|d0000d|do7go)/i, type: 'embed' },
-  { priority: 10, name: 'Voe', match: /\/\/(?:[a-z0-9-]+\.)*voe(?:-[a-z0-9-]+)?\.[a-z]{2,}\//i, type: 'embed' }
+  { priority: 9, name: 'Doodstream', match: /(dood|ds2play|d0000d|do7go)/i, type: 'embed' }
 ];
 
 // Si el host no se reconoce, se usa el nombre que la web le pone al servidor (si está en esta lista)
 const NAMED_SERVERS = {
-  mp4upload: 0, hls: 1, streamwish: 2, upnshare: 3, byse: 4, okru: 5, yourupload: 6,
-  filemoon: 7, streamtape: 8, doodstream: 9, voe: 10
+  mp4upload: 0, hls: 1, streamwish: 2, okru: 5, yourupload: 6,
+  filemoon: 7, streamtape: 8, doodstream: 9
 };
 
 const BLOCKED_SERVERS = [
   // Mega no carga en la app: fuera
   /(mega\.nz|mega\.io|mega\.co\.nz)/i,
+  // No cargan en la app: fuera (UPNShare, Byse, Voe)
+  /(upnshare|upns\.pro|upn\.one|uns\.bio)/i,
+  /\/\/[a-z0-9.-]*byse[a-z0-9-]*\.[a-z]{2,}/i,
+  /\/\/(?:[a-z0-9-]+\.)*voe(?:-[a-z0-9-]+)?\.[a-z]{2,}(?:[\/:?#]|$)/i,
   /(fembed|feurl|\/\/fe\.|ncdn|streamango|openload|rapidvideo|verystream|clipwatching|jetload|mixdrop|upstream|uqload|sbplay|sbembed|streamsb|embedrise|animeav1\.com\/(assets|static|img|js|css))/i
 ];
 
@@ -98,8 +99,8 @@ function classifyFastServer(rawUrl, nameHint) {
   const hint = String(nameHint || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   if (hint && Object.prototype.hasOwnProperty.call(NAMED_SERVERS, hint) && !/\.(js|css|png|jpe?g|gif|webp|svg|ico|woff2?)(\?|$)/i.test(url)) {
     const nm = Object.keys(NAMED_SERVERS).find((k) => k === hint);
-    const label = { mp4upload: 'Mp4upload', hls: 'HLS', streamwish: 'Streamwish', upnshare: 'UPNShare', byse: 'Byse', okru: 'Okru',
-      yourupload: 'YourUpload', filemoon: 'Filemoon', streamtape: 'Streamtape', doodstream: 'Doodstream', voe: 'Voe' }[nm];
+    const label = { mp4upload: 'Mp4upload', hls: 'HLS', streamwish: 'Streamwish', okru: 'Okru',
+      yourupload: 'YourUpload', filemoon: 'Filemoon', streamtape: 'Streamtape', doodstream: 'Doodstream' }[nm];
     return { priority: NAMED_SERVERS[nm], label, url, type: hint === 'hls' && /\.m3u8/i.test(url) ? 'hls' : 'embed' };
   }
 
@@ -557,7 +558,7 @@ async function discoverEndpoints(html, doc, pageUrl) {
 return {
   id: 'animeav1',
   name: 'AnimeAV1',
-  version: 9,
+  version: 10,
   baseUrl: BASE_URL,
 
   filters: FILTERS,
