@@ -38,21 +38,24 @@ class MainActivity : Activity() {
     private lateinit var buscador: EditText
     private lateinit var titulo: TextView
     private lateinit var grilla: GridView
-    private lateinit var btnCargarMas: TextView
     private lateinit var pModulo: TextView
     private val pestanas = mutableListOf<TextView>()
 
     private var pestana = 0
+
+    // Botón "Cargar más" del inicio: va trayendo los días anteriores (o más páginas si el módulo no tiene días)
+    private lateinit var botonMas: TextView
+    private var itemsMas: List<Item> = emptyList()
+    private var paginaMas = 1
+    private var cargandoMas = false
+    private var tokenMas = 0
+    private var alFinal = false
     private var todos: List<Item> = emptyList()
     private var nombresModulos: List<String> = emptyList()
     private var moduloSel: String? = null
     private var visibles: List<Item> = emptyList()
     private var versionCargada = -1
     private var modulosCargados: List<Modulo> = emptyList()
-    private var paginaInicio = 2
-    private var cargandoInicio = false
-    private var finInicio = false
-    private var tokenInicio = 0
 
     // Filtros locales (solo si ningún módulo trae los filtros de su sitio): Género / Tipo / Estado
     private val generosSel = mutableSetOf<String>()
@@ -187,27 +190,38 @@ class MainActivity : Activity() {
         grilla.verticalSpacing = dp(14)
         grilla.selector = ColorDrawable(Color.TRANSPARENT)
         grilla.setPadding(0, 0, 0, dp(8))
-        contenido.addView(
+        // El último renglón sube por encima del botón para que no lo tape
+        grilla.clipToPadding = false
+        grilla.setPadding(0, 0, 0, dp(84))
+
+        botonMas = TextView(this)
+        botonMas.text = "Cargar más"
+        botonMas.setTextColor(Color.WHITE)
+        botonMas.textSize = 18f
+        botonMas.setTypeface(null, Typeface.BOLD)
+        botonMas.gravity = Gravity.CENTER
+        botonMas.background = Ui.fondo(this, Ui.PILDORA, 18)
+        botonMas.visibility = View.GONE
+        botonMas.setOnClickListener { cargarMas() }
+
+        val marcoGrilla = FrameLayout(this)
+        marcoGrilla.addView(
             grilla,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+        val lpMas = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, dp(56), Gravity.BOTTOM
+        )
+        lpMas.bottomMargin = dp(12)
+        marcoGrilla.addView(botonMas, lpMas)
+        contenido.addView(
+            marcoGrilla,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
             )
         )
-
-        btnCargarMas = TextView(this)
-        btnCargarMas.text = "Cargar más"
-        btnCargarMas.gravity = Gravity.CENTER
-        btnCargarMas.textSize = 16f
-        btnCargarMas.setTypeface(null, Typeface.BOLD)
-        btnCargarMas.setTextColor(Color.WHITE)
-        btnCargarMas.background = Ui.fondo(this, Color.parseColor("#29263F"), 22)
-        btnCargarMas.setPadding(dp(12), 0, dp(12), 0)
-        val lpMas = LinearLayout.LayoutParams(dp(220), dp(48))
-        lpMas.gravity = Gravity.CENTER_HORIZONTAL
-        lpMas.topMargin = dp(10)
-        lpMas.bottomMargin = dp(10)
-        contenido.addView(btnCargarMas, lpMas)
-        btnCargarMas.setOnClickListener { cargarMasInicio() }
 
         // Barra inferior
         val barra = LinearLayout(this)
@@ -272,6 +286,8 @@ class MainActivity : Activity() {
         grilla.setOnScrollListener(object : AbsListView.OnScrollListener {
             override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) {}
             override fun onScroll(view: AbsListView?, first: Int, visible: Int, total: Int) {
+                alFinal = total > 0 && first + visible >= total
+                mostrarBotonMas()
                 if (total <= 0 || first + visible < total - 3) return
                 if (pestana == 0 && seleccion.isNotEmpty() && !cargandoFiltro && !finFiltro) {
                     cargarFiltro(false)
@@ -335,11 +351,8 @@ class MainActivity : Activity() {
 
     private fun aplicarResultado(r: Repositorio.Resultado) {
         modulosCargados = r.modulos
+        reiniciarMas()
         todos = r.modulos.flatMap { it.items }
-        paginaInicio = 2
-        cargandoInicio = false
-        finInicio = false
-        tokenInicio++
         nombresModulos = r.modulos.map { it.nombre }.distinct()
         // Siempre hay un módulo elegido: el último que usaste o, si no hay, el primero de la lista
         val sel = moduloSel
@@ -387,7 +400,9 @@ class MainActivity : Activity() {
                         else -> texto
                     }
                 } else {
-                    visibles = todos.filter { pasaFiltrosLocales(it) }
+                    val base = todos.filter { pasaFiltrosLocales(it) }
+                    val ya = base.map { it.id + "|" + it.titulo }.toSet()
+                    visibles = base + itemsMas.filter { moduloPasa(it) && (it.id + "|" + it.titulo) !in ya }
                     titulo.text = "Últimos episodios"
                 }
             }
@@ -425,66 +440,18 @@ class MainActivity : Activity() {
         scrollFiltros.visibility =
             if (pestana == 0 && filtros.childCount > 0) View.VISIBLE else View.GONE
         buscador.visibility = if (pestana == 1) View.VISIBLE else View.GONE
-        btnCargarMas.visibility = if (pestana == 0 && seleccion.isEmpty() && moduloSel != null && !finInicio) View.VISIBLE else View.GONE
-        btnCargarMas.isEnabled = !cargandoInicio
-        btnCargarMas.text = if (cargandoInicio) "Cargando..." else "Cargar más"
 
         grilla.adapter = AdaptadorGrilla(visibles)
+        alFinal = visibles.size <= 9
+        mostrarBotonMas()
+        grilla.post {
+            alFinal = visibles.isNotEmpty() && grilla.lastVisiblePosition >= visibles.size - 1
+            mostrarBotonMas()
+        }
 
         for ((i, t) in pestanas.withIndex()) {
             t.setTextColor(if (i == pestana) Ui.ROSA else Ui.GRIS)
         }
-    }
-
-    private fun cargarMasInicio() {
-        if (cargandoInicio || finInicio || pestana != 0 || seleccion.isNotEmpty()) return
-        val modulo = modulosCargados.firstOrNull { it.nombre == moduloSel } ?: return
-        if (modulo.fuente.isBlank()) {
-            Toast.makeText(this, "Este módulo no admite cargar más páginas", Toast.LENGTH_SHORT).show()
-            finInicio = true
-            actualizar()
-            return
-        }
-        // Guardar la posición antes de cualquier refresco del GridView (también mientras carga).
-        val posicionScroll = grilla.firstVisiblePosition
-        val vistaArriba = grilla.getChildAt(0)
-        val desplazamientoScroll = vistaArriba?.top ?: 0
-        cargandoInicio = true
-        val pagina = paginaInicio
-        val token = ++tokenInicio
-        actualizar()
-        grilla.post { grilla.setSelectionFromTop(posicionScroll, desplazamientoScroll) }
-        Thread {
-            var error: String? = null
-            val nuevos = try {
-                if (MotorHub.esFormatoHub(modulo.fuente)) MotorHub.catalogo(modulo.fuente, emptyMap(), pagina)
-                else MotorJs.home(modulo.fuente, pagina)
-            } catch (e: Exception) {
-                error = e.message ?: "Error de red"
-                emptyList()
-            }
-            val mensajeError = error
-            runOnUiThread {
-                if (token != tokenInicio) return@runOnUiThread
-                cargandoInicio = false
-                val existentes = todos.map { (if (it.id.isNotBlank()) it.id else it.titulo) + "|" + it.titulo }.toSet()
-                val unicos = nuevos.filter { ((if (it.id.isNotBlank()) it.id else it.titulo) + "|" + it.titulo) !in existentes }
-                if (mensajeError != null) {
-                    Toast.makeText(this, "No se pudo cargar la página: $mensajeError", Toast.LENGTH_LONG).show()
-                } else if (unicos.isEmpty()) {
-                    finInicio = true
-                    Toast.makeText(this, "No hay más animes anteriores", Toast.LENGTH_SHORT).show()
-                } else {
-                    todos = todos + unicos
-                    paginaInicio = pagina + 1
-                    Repositorio.agregarARegistro(unicos)
-                }
-                actualizar()
-                // actualizar() reconstruye el GridView; devolverlo a la misma posición evita
-                // que al pulsar «Cargar más» salte al inicio del catálogo.
-                grilla.post { grilla.setSelectionFromTop(posicionScroll, desplazamientoScroll) }
-            }
-        }.start()
     }
 
     // ---------- Selector de módulo (con la imagen de cada página) ----------
@@ -525,13 +492,10 @@ class MainActivity : Activity() {
             seleccion.clear()
             generosSel.clear(); tiposSel.clear(); estadosSel.clear()
             tokenFiltro++
-            tokenInicio++
-            paginaInicio = 2
-            cargandoInicio = false
-            finInicio = false
             itemsFiltro = emptyList()
             cargandoFiltro = false
             finFiltro = false
+            reiniciarMas()
             reconstruirFiltros()
             if (consulta.isNotEmpty()) iniciarBusqueda() else actualizar()
         }
@@ -868,6 +832,73 @@ class MainActivity : Activity() {
                 val posicion = if (primera) 0 else grilla.firstVisiblePosition
                 actualizar()
                 if (!primera) grilla.setSelection(posicion)
+            }
+        }.start()
+    }
+
+    // ---------- Botón "Cargar más" (días anteriores) ----------
+
+    private fun reiniciarMas() {
+        tokenMas++
+        itemsMas = emptyList()
+        paginaMas = 1
+        cargandoMas = false
+        if (::botonMas.isInitialized) botonMas.text = "Cargar más"
+    }
+
+    private fun moduloMas(): Modulo? = modulosCargados.firstOrNull {
+        it.nombre == moduloSel && it.fuente.isNotEmpty() && MotorHub.esFormatoHub(it.fuente)
+    }
+
+    // Se ve solo en Inicio, sin filtros, cuando llegas al final de la lista
+    private fun mostrarBotonMas() {
+        if (!::botonMas.isInitialized) return
+        val ok = pestana == 0 && seleccion.isEmpty() && alFinal && visibles.isNotEmpty() && moduloMas() != null
+        botonMas.visibility = if (ok) View.VISIBLE else View.GONE
+    }
+
+    private fun cargarMas() {
+        if (cargandoMas) return
+        val m = moduloMas() ?: return
+        cargandoMas = true
+        botonMas.text = "Cargando..."
+        val token = tokenMas
+        val desde = paginaMas
+        val conocidos = (todos + itemsMas).map { it.id + "|" + it.titulo }.toSet()
+        Thread {
+            var nuevos: List<Item> = emptyList()
+            var error: String? = null
+            var usada = desde
+            // Si ese día no trae nada se pasa al anterior (hasta 6 intentos)
+            for (i in 1..6) {
+                usada = desde + i
+                try {
+                    nuevos = MotorHub.recientes(m.fuente, usada).filter { (it.id + "|" + it.titulo) !in conocidos }
+                } catch (e: Exception) {
+                    error = e.message ?: "error"
+                    break
+                }
+                if (nuevos.isNotEmpty()) break
+            }
+            val mensaje = error
+            runOnUiThread {
+                if (token != tokenMas) return@runOnUiThread
+                cargandoMas = false
+                botonMas.text = "Cargar más"
+                paginaMas = usada
+                if (nuevos.isNotEmpty()) {
+                    itemsMas = itemsMas + nuevos
+                    Repositorio.agregarARegistro(nuevos)
+                } else {
+                    Toast.makeText(
+                        this,
+                        if (mensaje != null) "No se pudo cargar más: $mensaje" else "No hay más títulos",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+                val posicion = grilla.firstVisiblePosition
+                actualizar()
+                grilla.setSelection(posicion)
             }
         }.start()
     }

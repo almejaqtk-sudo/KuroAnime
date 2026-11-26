@@ -255,6 +255,21 @@ object MotorHub {
         }
     }
 
+    // Botón "Cargar más" de la pantalla principal. pagina 2 = el día anterior (módulos con latest(page)),
+    // pagina 3 = el día de antes... Si el módulo no tiene latest(), se piden más páginas de home().
+    fun recientes(codigo: String, pagina: Int): List<Item> {
+        val clave = claveDe(codigo)
+        val inf = info(codigo)
+        val nombre = inf.optString("name", "Módulo")
+        return when {
+            inf.optBoolean("tieneLatest") ->
+                itemsDeTexto(llamar(clave, codigo, "latest", JSONArray().put(pagina).toString()), nombre, codigo)
+            inf.optBoolean("tieneHome") ->
+                itemsDeTexto(llamar(clave, codigo, "home", JSONArray().put(pagina).toString()), nombre, codigo)
+            else -> emptyList()
+        }
+    }
+
     // Búsqueda por nombre en el sitio. Devuelve null si el módulo no sabe buscar.
     fun buscar(codigo: String, consulta: String, filtros: Map<String, String>, pagina: Int): List<Item>? {
         if (!esFormatoHub(codigo)) return null
