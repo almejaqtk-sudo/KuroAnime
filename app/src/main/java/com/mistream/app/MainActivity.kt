@@ -50,6 +50,7 @@ class MainActivity : Activity() {
     private var cargandoMas = false
     private var tokenMas = 0
     private var alFinal = false
+    private var paginaCatalogo = 0
     private var todos: List<Item> = emptyList()
     private var nombresModulos: List<String> = emptyList()
     private var moduloSel: String? = null
@@ -842,6 +843,7 @@ class MainActivity : Activity() {
         tokenMas++
         itemsMas = emptyList()
         paginaMas = 1
+        paginaCatalogo = 0
         cargandoMas = false
         if (::botonMas.isInitialized) botonMas.text = "Cargar más"
     }
@@ -865,12 +867,14 @@ class MainActivity : Activity() {
         val token = tokenMas
         val desde = paginaMas
         val conocidos = (todos + itemsMas).map { it.id + "|" + it.titulo }.toSet()
+        val catDesde = paginaCatalogo
         Thread {
+            var cat = catDesde
             var nuevos: List<Item> = emptyList()
             var error: String? = null
             var usada = desde
-            // Si ese día no trae nada se pasa al anterior (hasta 6 intentos)
-            for (i in 1..6) {
+            // Si ese día no trae nada se pasa al anterior (hasta 7 intentos)
+            for (i in 1..7) {
                 usada = desde + i
                 try {
                     nuevos = MotorHub.recientes(m.fuente, usada).filter { (it.id + "|" + it.titulo) !in conocidos }
@@ -880,12 +884,27 @@ class MainActivity : Activity() {
                 }
                 if (nuevos.isNotEmpty()) break
             }
+            // Si los días anteriores no traen nada nuevo, se sigue con más títulos del catálogo
+            if (nuevos.isEmpty() && error == null) {
+                for (k in 1..3) {
+                    cat++
+                    try {
+                        nuevos = MotorHub.catalogo(m.fuente, emptyMap(), cat)
+                            .filter { (it.id + "|" + it.titulo) !in conocidos }
+                    } catch (e: Exception) {
+                        error = e.message ?: "error"
+                        break
+                    }
+                    if (nuevos.isNotEmpty()) break
+                }
+            }
             val mensaje = error
             runOnUiThread {
                 if (token != tokenMas) return@runOnUiThread
                 cargandoMas = false
                 botonMas.text = "Cargar más"
                 paginaMas = usada
+                paginaCatalogo = cat
                 if (nuevos.isNotEmpty()) {
                     itemsMas = itemsMas + nuevos
                     Repositorio.agregarARegistro(nuevos)

@@ -19,7 +19,6 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
-import android.webkit.JavascriptInterface
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -372,26 +371,13 @@ class PlayerActivity : Activity() {
       try { window.frames[i].postMessage({kuroEscala: modo}, '*'); } catch(e) {}
     }
   }
-  // Algunos embeds responden HTTP 200 pero muestran un error dentro del reproductor.
-  // Detectarlo en el propio frame y avisar a la app para probar el siguiente servidor.
-  function revisarError(){
-    try {
-      var texto = (document.body ? document.body.innerText : '').toLowerCase();
-      if (/failed to load video|please refresh|video not found|file not found|error loading video|video unavailable|source not found/.test(texto)) {
-        if (!window.__kuroErrorEnviado) {
-          window.__kuroErrorEnviado = true;
-          window.top.postMessage({kuroPlayerError:true}, '*');
-        }
-      }
-    } catch(e) {}
-  }
   window.addEventListener('message', function(e){
     var d = e.data;
     if (d && typeof d === 'object' && d.kuroEscala) { modo = d.kuroEscala; aplicar(); reenviar(); }
   });
   aplicar();
   document.addEventListener('DOMContentLoaded', aplicar);
-  setInterval(function(){ aplicar(); reenviar(); revisarError(); }, 1500);
+  setInterval(function(){ aplicar(); reenviar(); }, 1500);
 })();
 """
 
@@ -474,7 +460,7 @@ class PlayerActivity : Activity() {
             return
         }
         Thread {
-            val buenos = Servidores.filtrarFuncionales(sinNavegador)
+            val buenos = if (sinNavegador.size > 1) Servidores.filtrarFuncionales(sinNavegador) else sinNavegador
             runOnUiThread {
                 if (isFinishing || indiceEp != i) return@runOnUiThread
                 if (buenos.isEmpty()) {
@@ -483,7 +469,7 @@ class PlayerActivity : Activity() {
                     return@runOnUiThread
                 }
                 val pref = prefs.getString("srv_pref", null)
-                val ini = Servidores.indiceDePref(buenos, pref)
+                val ini = Servidores.indiceParecido(buenos, pref)
                 listaServidores = if (ini > 0) listOf(buenos[ini]) + buenos.filterIndexed { k, _ -> k != ini } else buenos
                 reproduciendo = true
                 actualizarBarra()
@@ -521,7 +507,7 @@ class PlayerActivity : Activity() {
                     }
                     // Si ya elegiste un servidor antes y este episodio lo tiene, se usa solo
                     val pref = prefs.getString("srv_pref", null)
-                    var idx = Servidores.indiceDePref(lista, pref)
+                    var idx = Servidores.indiceParecido(lista, pref)
                     if (idx < 0 && pref != null) {
                         // Ese servidor no está en este episodio: se busca otro del mismo idioma
                         val idioma = pref.substringAfterLast("|", "")
@@ -539,7 +525,8 @@ class PlayerActivity : Activity() {
                     }
                     when {
                         idx >= 0 -> usarServidor(idx)
-                        // Sin servidor elegido: se usa el primero que no sea web (carga más rápido)
+                        // Sin servidor elegido: Mp4upload primero; si no hay, el primero que no sea web (carga más rápido)
+                        Servidores.esMp4upload(lista[0]) -> usarServidor(0)
                         lista[0].tipo != "embed" && lista[0].tipo != "external" -> usarServidor(0)
                         else -> mostrarSelector()
                     }
@@ -571,8 +558,7 @@ class PlayerActivity : Activity() {
     private fun usarServidor(idx: Int) {
         if (idx !in listaServidores.indices) return
         val elegido = listaServidores[idx]
-        // Recordar también la selección inicial automática: al pulsar Siguiente se reutiliza
-        // el mismo host cuando el siguiente episodio lo ofrece.
+        // El servidor que usas queda guardado: al pasar al siguiente episodio se mantiene
         prefs.edit().putString("srv_pref", Servidores.claveVisible(listaServidores, idx)).apply()
         when (elegido.tipo) {
             "embed" -> {
@@ -591,15 +577,6 @@ class PlayerActivity : Activity() {
 
     // ---------- Servidores web (embed) dentro de esta pantalla ----------
 
-    private inner class PlayerBridge {
-        @JavascriptInterface
-        fun onPlayerError() {
-            runOnUiThread {
-                if (modoWeb && urlsWeb.isNotEmpty()) falloWeb()
-            }
-        }
-    }
-
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     private fun asegurarWeb(): WebView {
         web?.let { return it }
@@ -613,7 +590,6 @@ class PlayerActivity : Activity() {
         s.javaScriptCanOpenWindowsAutomatically = false
         s.setSupportMultipleWindows(false)
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
-        w.addJavascriptInterface(PlayerBridge(), "KuroBridge")
 
         // Para ajustar solo el video (sin tocar la línea de tiempo de la página)
         escalaWebSoportada = try {
@@ -642,9 +618,8 @@ class PlayerActivity : Activity() {
                 request: WebResourceRequest,
                 errorResponse: WebResourceResponse
             ) {
-                val actual = urlsWeb.getOrNull(indiceWeb)?.url
-                if (errorResponse.statusCode >= 400 &&
-                    (request.isForMainFrame || request.url.toString() == actual)
+                if (request.url.toString() == urlsWeb.getOrNull(indiceWeb)?.url &&
+                    errorResponse.statusCode >= 400
                 ) falloWeb()
             }
 
@@ -653,8 +628,7 @@ class PlayerActivity : Activity() {
                 request: WebResourceRequest,
                 error: WebResourceError
             ) {
-                val actual = urlsWeb.getOrNull(indiceWeb)?.url
-                if (request.isForMainFrame || request.url.toString() == actual) falloWeb()
+                if (request.url.toString() == urlsWeb.getOrNull(indiceWeb)?.url) falloWeb()
             }
         }
         w.webChromeClient = object : WebChromeClient() {
@@ -717,11 +691,10 @@ class PlayerActivity : Activity() {
             "iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0}</style>" +
             "</head><body><iframe id=\"f\" " +
             "src=\"" + seguro + "\" " +
-            "sandbox=\"allow-scripts allow-same-origin allow-forms allow-presentation allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation\" " +
+            "sandbox=\"allow-scripts allow-same-origin allow-forms allow-presentation\" " +
             "allow=\"autoplay; fullscreen; encrypted-media; picture-in-picture\" " +
             "allowfullscreen></iframe>" +
-            "<script>window.addEventListener('message',function(e){if(e.data&&e.data.kuroPlayerError&&window.KuroBridge){window.KuroBridge.onPlayerError();}});" +
-            "window.postMessage({kuroEscala:'" + modoCss(idxEscala) + "'},'*');</script>" +
+            "<script>window.postMessage({kuroEscala:'" + modoCss(idxEscala) + "'},'*');</script>" +
             "</body></html>"
         web?.loadDataWithBaseURL("https://localhost/", html, "text/html", "utf-8", null)
     }
@@ -737,9 +710,6 @@ class PlayerActivity : Activity() {
             return
         }
         indiceWeb = (indiceWeb + 1) % urlsWeb.size
-        // Si un embed falla, recordar el siguiente servidor que sí se está probando
-        // para no volver a elegir automáticamente el que acaba de fallar en el próximo episodio.
-        prefs.edit().putString("srv_pref", Servidores.clave(urlsWeb[indiceWeb])).apply()
         cargarWeb()
     }
 

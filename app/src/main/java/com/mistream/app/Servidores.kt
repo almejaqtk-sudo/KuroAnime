@@ -57,13 +57,8 @@ object Servidores {
         else -> ""
     }
 
-    // Identificador estable: nombre normalizado + host + idioma. El host permite
-    // reconocer el mismo reproductor aunque el módulo cambie su etiqueta entre episodios.
-    private fun hostServidor(s: ServerLink): String = try {
-        java.net.URI(s.url).host?.lowercase()?.removePrefix("www.") ?: s.nombre.lowercase().trim()
-    } catch (_: Exception) { s.nombre.lowercase().trim() }
-
-    fun clave(s: ServerLink): String = hostServidor(s) + "|" + normalizarIdioma(s.idioma, s.nombre)
+    // Clave que identifica a un servidor (nombre + idioma): el mismo servidor en SUB y en DUB son distintos
+    fun clave(s: ServerLink): String = s.nombre + "|" + normalizarIdioma(s.idioma, s.nombre)
 
     // Nombres como se ven en la lista: si el mismo servidor sale varias veces en el mismo idioma,
     // el segundo se llama "Mp4upload 2", el tercero "Mp4upload 3"...
@@ -82,30 +77,30 @@ object Servidores {
     }
 
     // Clave del servidor número i de la lista (distingue "Mp4upload" de "Mp4upload 2")
-    fun claveVisible(lista: List<ServerLink>, i: Int): String = clave(lista[i])
+    fun claveVisible(lista: List<ServerLink>, i: Int): String {
+        val s = lista[i]
+        return nombresVisibles(lista)[i] + "|" + normalizarIdioma(s.idioma, s.nombre)
+    }
 
-    // Acepta también preferencias antiguas (nombre|idioma) guardadas por versiones previas.
-    // Si el mismo servidor aparece con otra etiqueta en el episodio siguiente, se reconoce por host.
+    // Posición del servidor guardado como preferido, o -1 si este episodio no lo tiene
     fun indiceDePref(lista: List<ServerLink>, pref: String?): Int {
-        if (pref.isNullOrBlank()) return -1
-        val exacto = lista.indices.indexOfFirst { claveVisible(lista, it) == pref }
+        if (pref == null) return -1
+        return lista.indices.indexOfFirst { claveVisible(lista, it) == pref }
+    }
+
+    // Busca el servidor que se estaba usando aunque cambie el número o el idioma:
+    // primero el idéntico, luego el mismo nombre ("Mp4upload 2" = "Mp4upload") con el mismo idioma o con otro
+    fun indiceParecido(lista: List<ServerLink>, pref: String?): Int {
+        if (pref == null) return -1
+        val exacto = indiceDePref(lista, pref)
         if (exacto >= 0) return exacto
+        val sinNumero = Regex("\\s+\\d+$")
+        val nombre = pref.substringBeforeLast("|").replace(sinNumero, "").trim().lowercase()
         val idioma = pref.substringAfterLast("|", "")
-        val nombreAntiguo = pref.substringBeforeLast("|", pref).lowercase().trim()
-        val porHostEIdioma = lista.indices.indexOfFirst { i ->
-            val s = lista[i]
-            val host = hostServidor(s)
-            (idioma.isEmpty() || normalizarIdioma(s.idioma, s.nombre) == idioma) &&
-                (host == nombreAntiguo || s.nombre.lowercase().trim() == nombreAntiguo ||
-                    host.startsWith(nombreAntiguo) || nombreAntiguo.startsWith(host))
-        }
-        if (porHostEIdioma >= 0) return porHostEIdioma
-        return lista.indices.indexOfFirst { i ->
-            val s = lista[i]
-            val host = hostServidor(s)
-            host == nombreAntiguo || s.nombre.lowercase().trim() == nombreAntiguo ||
-                host.startsWith(nombreAntiguo) || nombreAntiguo.startsWith(host)
-        }
+        val nombres = nombresVisibles(lista).map { it.replace(sinNumero, "").trim().lowercase() }
+        val mismos = lista.indices.filter { nombres[it] == nombre }
+        if (mismos.isEmpty()) return -1
+        return mismos.firstOrNull { normalizarIdioma(lista[it].idioma, lista[it].nombre) == idioma } ?: mismos.first()
     }
 
     // ---------- Selector (hoja inferior: círculo + nombre + idioma) ----------
@@ -278,11 +273,7 @@ object Servidores {
         "file not found", "video not found", "file was deleted", "file is no longer available",
         "has been removed", "has been deleted", "video no existe", "archivo no existe", "no encontrado",
         "no longer exists", "does not exist", "video unavailable", "video is unavailable",
-        "video not available", "no disponible", "ya no está disponible", "was removed", "file removed",
-        "failed to load video", "please refresh", "error loading video", "cannot load video",
-        "video source not found", "source not found", "player error", "error 404",
-        "this video is unavailable", "the video could not be loaded", "no playable sources",
-        "media not found", "video has been removed", "file unavailable", "invalid video source"
+        "video not available", "no disponible", "ya no está disponible", "was removed", "file removed"
     )
 
     private fun abrir(url: String, headers: Map<String, String>, rango: String? = null): HttpURLConnection {
@@ -403,9 +394,7 @@ object Servidores {
             con.disconnect()
         }
         val cuerpo = crudo.lowercase()
-        // Mensajes explícitos del reproductor (incluido "Failed to load video") indican
-        // que el embed no sirve aunque la página responda HTTP 200 y tenga mucho HTML.
-        if (marcasError.any { cuerpo.contains(it) }) return Estado.MALO
+        if (cuerpo.length < 3000 && marcasError.any { cuerpo.contains(it) }) return Estado.MALO
         val dur = duracionDeclarada(cuerpo)
         if (dur != null && dur > 0 && dur < MIN_SEGUNDOS) return Estado.CORTO
 
@@ -456,16 +445,15 @@ object Servidores {
         Regex("""(^|[/.])mega\.(nz|io|co\.nz)([/:?#]|$)""", RegexOption.IGNORE_CASE).containsMatchIn(url) ||
             nombre.trim().lowercase().let { it == "mega" || it.startsWith("mega ") || it.startsWith("mega·") }
 
-    // Orden de los servidores: primero Mp4upload, luego HLS, después el resto en el orden que venían
-    private fun prioridad(s: ServerLink): Int {
-        val n = s.nombre.lowercase()
-        val u = s.url.lowercase()
-        return when {
-            n.contains("mp4upload") || u.contains("mp4upload") -> 0
-            n.startsWith("hls") || u.contains("zilla-networks") || u.contains(".m3u8") || s.tipo == "hls" -> 1
-            n.contains("streamwish") || n.contains("upnshare") || n.contains("byse") -> 2
-            else -> 3
-        }
+    fun esMp4upload(s: ServerLink): Boolean =
+        s.nombre.lowercase().contains("mp4upload") || s.url.lowercase().contains("mp4upload")
+
+    // Orden de los servidores: primero Mp4upload, luego los servidores web (embed), después el resto
+    // (siempre en el orden en que venían)
+    private fun prioridad(s: ServerLink): Int = when {
+        esMp4upload(s) -> 0
+        s.tipo == "embed" -> 1
+        else -> 2
     }
 
     fun ordenar(lista: List<ServerLink>): List<ServerLink> = lista.sortedBy { prioridad(it) } // estable
@@ -483,7 +471,10 @@ object Servidores {
             val estados = resultados.map { f ->
                 if (f.isCancelled) Estado.DUDOSO else try { f.get() } catch (e: Exception) { Estado.DUDOSO }
             }
-            val buenos = candidatos.filterIndexed { i, _ -> estados[i] == Estado.BUENO }
+            // Mp4upload tarda en responder y a veces se agota el tiempo: si no está claramente caído, se conserva
+            val buenos = candidatos.filterIndexed { i, s ->
+                estados[i] == Estado.BUENO || (estados[i] == Estado.DUDOSO && esMp4upload(s))
+            }
             if (buenos.isNotEmpty()) return buenos
             return candidatos.filterIndexed { i, _ -> estados[i] == Estado.DUDOSO }
         } finally {
