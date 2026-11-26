@@ -403,6 +403,11 @@ class DetalleActivity : Activity() {
             // Módulos AnimeHub: primero se buscan los servidores que funcionan y se elige uno
             s.size == 1 && s[0].tipo == "hub" -> elegirServidorHub(indice, s[0])
             s.size > 1 -> elegirServidorLista(indice, s)
+            // Un solo servidor y modo externo elegido: se abre directo afuera
+            s.size == 1 && Servidores.usarExterno(this) -> {
+                Servidores.abrirExterno(this, s[0], tituloEpisodio(indice))
+                Progreso.guardarUltimo(prefs, titulo, episodios[indice].titulo)
+            }
             else -> abrirReproductor(indice)
         }
     }
@@ -487,9 +492,18 @@ class DetalleActivity : Activity() {
             { which ->
                 prefs.edit().putString("srv_pref", Servidores.claveVisible(servidores, which)).apply()
                 abrirReproductor(indice)
+            },
+            {},
+            tituloEpisodio(indice),
+            { which ->
+                prefs.edit().putString("srv_pref", Servidores.claveVisible(servidores, which)).apply()
+                Progreso.guardarUltimo(prefs, titulo, episodios[indice].titulo)
             }
         )
     }
+
+    private fun tituloEpisodio(indice: Int): String =
+        titulo + " - " + (episodios.getOrNull(indice)?.titulo ?: "")
 
     private fun abrirReproductor(indice: Int) {
         val intent = Intent(this, PlayerActivity::class.java)
