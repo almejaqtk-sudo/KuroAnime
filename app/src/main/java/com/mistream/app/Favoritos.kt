@@ -41,6 +41,27 @@ object Favoritos {
         return true
     }
 
+    // Crea la carpeta y guarda el anime actual dentro de ella en una sola operación.
+    fun crearCarpetaConAnime(prefs: SharedPreferences, nombre: String, titulo: String): Boolean {
+        val n = nombre.trim()
+        if (n.isEmpty()) return false
+        val carpetas = leerCarpetas(prefs)
+        if (carpetas.has(n)) return false
+
+        val animes = leer(prefs)
+        animes.add(titulo)
+        val lista = JSONArray().put(titulo)
+        carpetas.put(n, lista)
+
+        val favoritosJson = JSONArray()
+        animes.forEach { favoritosJson.put(it) }
+        prefs.edit()
+            .putString("favoritos", favoritosJson.toString())
+            .putString("favoritos_carpetas", carpetas.toString())
+            .apply()
+        return true
+    }
+
     fun agregarACarpeta(prefs: SharedPreferences, carpeta: String, titulo: String) {
         val o = leerCarpetas(prefs); val a = o.optJSONArray(carpeta) ?: JSONArray()
         for (i in 0 until a.length()) if (a.optString(i) == titulo) { o.put(carpeta, a); prefs.edit().putString("favoritos_carpetas", o.toString()).apply(); return }

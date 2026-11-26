@@ -660,9 +660,9 @@ class DetalleActivity : Activity() {
             .setView(contenedor).setNegativeButton("Cerrar", null).create()
         agregar.setOnClickListener {
             val nombre = entrada.text.toString().trim()
-            if (Favoritos.crearCarpeta(prefs, nombre)) {
-                Favoritos.agregarACarpeta(prefs, nombre, titulo)
-                Toast.makeText(this, "Carpeta creada y anime agregado", Toast.LENGTH_SHORT).show()
+            if (Favoritos.crearCarpetaConAnime(prefs, nombre, titulo)) {
+                actualizarFav()
+                Toast.makeText(this, "Carpeta creada y anime agregado automáticamente", Toast.LENGTH_SHORT).show()
                 dialogo.dismiss()
             } else Toast.makeText(this, "Escribe un nombre nuevo", Toast.LENGTH_SHORT).show()
         }
