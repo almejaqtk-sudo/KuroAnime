@@ -498,7 +498,7 @@ class DetalleActivity : Activity() {
             setPadding(dp(20), dp(8), dp(20), dp(8))
         }
         val filaCrear = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val entrada = EditText(this).apply { hint = "Nombre de grupo"; singleLine = true }
+        val entrada = EditText(this).apply { hint = "Nombre de grupo"; setSingleLine(true) }
         filaCrear.addView(entrada, LinearLayout.LayoutParams(0, dp(52), 1f))
         val agregar = TextView(this).apply {
             text = "Agregar"; textSize = 16f; setTypeface(null, Typeface.BOLD)
