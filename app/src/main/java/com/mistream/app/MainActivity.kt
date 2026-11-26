@@ -27,6 +27,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.PopupMenu
 import android.widget.Toast
 import org.json.JSONObject
 import org.json.JSONArray
@@ -41,6 +42,10 @@ class MainActivity : Activity() {
     private lateinit var titulo: TextView
     private lateinit var grilla: GridView
     private lateinit var accionesFavoritos: LinearLayout
+    private lateinit var tabsCarpetas: LinearLayout
+    private lateinit var textoLogo: TextView
+    private lateinit var textoLogoAnime: TextView
+    private lateinit var menuFavoritos: TextView
     private lateinit var pModulo: TextView
     private val pestanas = mutableListOf<TextView>()
 
@@ -124,11 +129,13 @@ class MainActivity : Activity() {
         val logo = LinearLayout(this)
         logo.orientation = LinearLayout.HORIZONTAL
         val kuro = TextView(this)
+        textoLogo = kuro
         kuro.text = "Kuro"
         kuro.setTextColor(Color.WHITE)
         kuro.textSize = 28f
         kuro.setTypeface(null, Typeface.BOLD)
         val anime = TextView(this)
+        textoLogoAnime = anime
         anime.text = "Anime"
         anime.setTextColor(Ui.ROSA)
         anime.textSize = 28f
@@ -142,6 +149,13 @@ class MainActivity : Activity() {
 
         pModulo = Ui.pildora(this, "Módulos ▾")
         cabecera.addView(pModulo)
+        menuFavoritos = TextView(this).apply {
+            text = "☰"; textSize = 27f; gravity = Gravity.CENTER
+            setTextColor(Color.WHITE); visibility = View.GONE
+            setPadding(dp(12), dp(4), dp(4), dp(4))
+            setOnClickListener { mostrarMenuCopia(it) }
+        }
+        cabecera.addView(menuFavoritos)
         contenido.addView(cabecera)
 
         // Buscador (solo en la pestaña Buscar)
@@ -191,28 +205,16 @@ class MainActivity : Activity() {
         val accionesFav = LinearLayout(this)
         accionesFav.orientation = LinearLayout.HORIZONTAL
         accionesFav.visibility = View.GONE
-        val crearCarpeta = Ui.pildora(this, "＋ Carpeta")
-        crearCarpeta.setOnClickListener {
-            val entrada = EditText(this); entrada.hint = "Nombre de carpeta"
-            AlertDialog.Builder(this).setTitle("Nueva carpeta").setView(entrada)
-                .setPositiveButton("Crear") { _, _ ->
-                    if (Favoritos.crearCarpeta(prefs, entrada.text.toString())) {
-                        Toast.makeText(this, "Carpeta creada", Toast.LENGTH_SHORT).show()
-                        mostrarSelectorCarpeta()
-                    } else Toast.makeText(this, "Nombre vacío o carpeta existente", Toast.LENGTH_SHORT).show()
-                }.setNegativeButton("Cancelar", null).show()
-        }
-        val elegirCarpeta = Ui.pildora(this, "Carpetas ▾")
-        elegirCarpeta.setOnClickListener { mostrarSelectorCarpeta() }
-        val backup = Ui.pildora(this, "Copia seguridad")
-        backup.setOnClickListener { crearCopiaSeguridad() }
-        val restaurar = Ui.pildora(this, "Restaurar")
-        restaurar.setOnClickListener { elegirCopiaSeguridad() }
-        for (b in listOf(crearCarpeta, elegirCarpeta, backup, restaurar)) {
-            val lp = LinearLayout.LayoutParams(0, -2, 1f); lp.setMargins(dp(2), dp(4), dp(2), dp(4)); accionesFav.addView(b, lp)
-        }
-        contenido.addView(accionesFav)
         accionesFavoritos = accionesFav
+        contenido.addView(accionesFav)
+
+        val scrollCarpetas = HorizontalScrollView(this)
+        scrollCarpetas.isHorizontalScrollBarEnabled = false
+        tabsCarpetas = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        scrollCarpetas.addView(tabsCarpetas)
+        scrollCarpetas.visibility = View.GONE
+        contenido.addView(scrollCarpetas)
+        scrollCarpetas.tag = "tabs_carpetas"
 
         // Cuadrícula
         grilla = GridView(this)
@@ -468,8 +470,15 @@ class MainActivity : Activity() {
             titulo.text = "Favoritos vacíos. Abre un anime y toca ☆ Favoritos."
         }
 
-        cabecera.visibility = if (pestana <= 1) View.VISIBLE else View.GONE
-        accionesFavoritos.visibility = if (pestana == 2) View.VISIBLE else View.GONE
+        cabecera.visibility = View.VISIBLE
+        pModulo.visibility = if (pestana == 2) View.GONE else View.VISIBLE
+        menuFavoritos.visibility = if (pestana == 2) View.VISIBLE else View.GONE
+        textoLogo.text = if (pestana == 2) "Favoritos" else "Kuro"
+        textoLogoAnime.visibility = if (pestana == 2) View.GONE else View.VISIBLE
+        accionesFavoritos.visibility = View.GONE
+        val scrollTabs = contenidoTabsCarpetas()
+        scrollTabs.visibility = if (pestana == 2 && Favoritos.nombresCarpetas(prefs).isNotEmpty()) View.VISIBLE else View.GONE
+        if (pestana == 2) construirTabsCarpetas()
         scrollFiltros.visibility =
             if (pestana == 0 && filtros.childCount > 0) View.VISIBLE else View.GONE
         buscador.visibility = if (pestana == 1) View.VISIBLE else View.GONE
@@ -954,6 +963,34 @@ class MainActivity : Activity() {
         }.start()
     }
 
+
+    private fun contenidoTabsCarpetas(): HorizontalScrollView {
+        // El contenedor se crea junto a la grilla y se conserva como hijo directo del contenido.
+        return (tabsCarpetas.parent as? HorizontalScrollView)
+            ?: (tabsCarpetas.parent as View).let { it as HorizontalScrollView }
+    }
+
+    private fun construirTabsCarpetas() {
+        tabsCarpetas.removeAllViews()
+        val nombres = listOf("Todos") + Favoritos.nombresCarpetas(prefs)
+        for (nombre in nombres) {
+            val real = if (nombre == "Todos") null else nombre
+            val tab = TextView(this).apply {
+                text = nombre; textSize = 16f; setTypeface(null, Typeface.BOLD)
+                setTextColor(if (carpetaFavoritos == real) Color.rgb(170, 195, 255) else Color.WHITE)
+                gravity = Gravity.CENTER; setPadding(dp(18), dp(18), dp(18), dp(18))
+                setOnClickListener { carpetaFavoritos = real; actualizar() }
+            }
+            tabsCarpetas.addView(tab, LinearLayout.LayoutParams(-2, dp(54)))
+        }
+    }
+
+    private fun mostrarMenuCopia(anchor: View) {
+        val menu = PopupMenu(this, anchor)
+        menu.menu.add("Exportar copia de seguridad").setOnMenuItemClickListener { crearCopiaSeguridad(); true }
+        menu.menu.add("Restaurar copia de seguridad").setOnMenuItemClickListener { elegirCopiaSeguridad(); true }
+        menu.show()
+    }
 
     private fun mostrarSelectorCarpeta() {
         val carpetas = Favoritos.nombresCarpetas(prefs)

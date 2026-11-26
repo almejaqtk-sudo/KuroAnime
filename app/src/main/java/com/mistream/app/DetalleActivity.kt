@@ -19,6 +19,10 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.ProgressBar
+import android.widget.EditText
+import android.widget.RadioButton
+import android.widget.RadioGroup
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 
@@ -224,15 +228,7 @@ class DetalleActivity : Activity() {
         botonLista.setOnClickListener {
             val ahora = Favoritos.alternar(prefs, titulo)
             actualizarFav()
-            if (ahora) {
-                val carpetas = Favoritos.nombresCarpetas(prefs)
-                if (carpetas.isNotEmpty()) {
-                    AlertDialog.Builder(this).setTitle("Agregar a una carpeta")
-                        .setItems((listOf("Sin carpeta") + carpetas).toTypedArray()) { _, which ->
-                            if (which > 0) Favoritos.agregarACarpeta(prefs, carpetas[which - 1], titulo)
-                        }.setNegativeButton("Ahora no", null).show()
-                }
-            }
+            if (ahora) mostrarDialogoCarpetasFavorito()
             Toast.makeText(this, if (ahora) "Agregado a Favoritos" else "Quitado de Favoritos", Toast.LENGTH_SHORT).show()
         }
         val lpLista = LinearLayout.LayoutParams(
@@ -336,6 +332,50 @@ class DetalleActivity : Activity() {
         tvMeta.text = metaActual
         tvMeta.visibility = if (metaActual.isEmpty()) View.GONE else View.VISIBLE
         tvDesc.text = if (descripcionActual.isEmpty()) "Sin descripción" else descripcionActual
+    }
+
+    private fun mostrarDialogoCarpetasFavorito() {
+        val contenedor = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+        }
+        val filaCrear = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val entrada = EditText(this).apply { hint = "Nombre de grupo"; singleLine = true }
+        filaCrear.addView(entrada, LinearLayout.LayoutParams(0, dp(52), 1f))
+        val agregar = TextView(this).apply {
+            text = "Agregar"; textSize = 16f; setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.rgb(170, 195, 255)); gravity = Gravity.CENTER
+            setPadding(dp(12), 0, dp(8), 0)
+        }
+        filaCrear.addView(agregar)
+        contenedor.addView(filaCrear)
+        val radios = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+        val carpetas = Favoritos.nombresCarpetas(prefs)
+        carpetas.forEach { nombre ->
+            val radio = RadioButton(this).apply { text = nombre; textSize = 16f; setTextColor(Color.WHITE); tag = nombre }
+            radios.addView(radio)
+        }
+        val scroll = ScrollView(this).apply { addView(radios) }
+        contenedor.addView(scroll, LinearLayout.LayoutParams(-1, dp(310)))
+        val dialogo = AlertDialog.Builder(this).setTitle("Agregar a favoritos")
+            .setView(contenedor).setNegativeButton("Cerrar", null).create()
+        agregar.setOnClickListener {
+            val nombre = entrada.text.toString().trim()
+            if (Favoritos.crearCarpeta(prefs, nombre)) {
+                Favoritos.agregarACarpeta(prefs, nombre, titulo)
+                Toast.makeText(this, "Carpeta creada y anime agregado", Toast.LENGTH_SHORT).show()
+                dialogo.dismiss()
+            } else Toast.makeText(this, "Escribe un nombre nuevo", Toast.LENGTH_SHORT).show()
+        }
+        radios.setOnCheckedChangeListener { group, checkedId ->
+            val radio = group.findViewById<RadioButton>(checkedId)
+            if (radio != null) {
+                Favoritos.agregarACarpeta(prefs, radio.tag.toString(), titulo)
+                Toast.makeText(this, "Agregado a ${radio.tag}", Toast.LENGTH_SHORT).show()
+                dialogo.dismiss()
+            }
+        }
+        dialogo.show()
     }
 
     private fun actualizarFav() {
