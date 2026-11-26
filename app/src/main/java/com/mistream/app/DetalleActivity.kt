@@ -16,6 +16,7 @@ import android.view.ViewGroup
 import android.widget.BaseAdapter
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.ProgressBar
@@ -112,6 +113,17 @@ class DetalleActivity : Activity() {
         atras.background = Ui.fondo(this, colorFila, 22, Ui.BORDE)
         atras.setOnClickListener { finish() }
         barraSup.addView(atras, LinearLayout.LayoutParams(dp(44), dp(44)))
+        val tituloBarra = TextView(this).apply {
+            text = titulo
+            setTextColor(Color.WHITE)
+            textSize = 19f
+            setTypeface(null, Typeface.BOLD)
+            gravity = Gravity.CENTER_VERTICAL
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(dp(16), 0, dp(8), 0)
+        }
+        barraSup.addView(tituloBarra, LinearLayout.LayoutParams(0, dp(44), 1f))
         raiz.addView(
             barraSup,
             LinearLayout.LayoutParams(
@@ -120,24 +132,78 @@ class DetalleActivity : Activity() {
             )
         )
 
+        // Pestañas INFO / EPISODIOS: separan los datos del anime de su lista de capítulos.
         lista = ListView(this)
         lista.divider = null
         lista.dividerHeight = 0
         lista.setBackgroundColor(Ui.FONDO)
         lista.selector = ColorDrawable(Color.TRANSPARENT)
-        lista.addHeaderView(crearCabecera(), null, false)
+        lista.addHeaderView(crearCabeceraEpisodios(), null, false)
         adaptador = AdaptadorEpisodios()
         lista.adapter = adaptador
         lista.setOnItemClickListener { _, _, pos, _ ->
             val real = adaptador.indiceReal(pos - lista.headerViewsCount)
             if (real >= 0) reproducir(real)
         }
-        raiz.addView(
-            lista,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-        )
 
+        val tabInfo = TextView(this).apply {
+            text = "INFO"
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Ui.ROSA)
+            isAllCaps = true
+        }
+        val tabEpisodios = TextView(this).apply {
+            text = "EPISODIOS"
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.LTGRAY)
+            isAllCaps = true
+        }
+        val lineaInfo = View(this).apply { setBackgroundColor(Ui.ROSA) }
+        val lineaEpisodios = View(this).apply { setBackgroundColor(Color.TRANSPARENT) }
+        val tabs = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(Color.parseColor("#202020"))
+        }
+        fun agregarPestana(texto: TextView, linea: View): LinearLayout {
+            return LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(texto, LinearLayout.LayoutParams(-1, dp(48)))
+                addView(linea, LinearLayout.LayoutParams(-1, dp(3)))
+                tabs.addView(this, LinearLayout.LayoutParams(0, dp(51), 1f))
+            }
+        }
+        agregarPestana(tabInfo, lineaInfo)
+        agregarPestana(tabEpisodios, lineaEpisodios)
+
+        val contenido = FrameLayout(this)
+        val infoScroll = ScrollView(this).apply {
+            isFillViewport = true
+            setBackgroundColor(Ui.FONDO)
+            addView(crearCabecera())
+        }
+        contenido.addView(infoScroll, FrameLayout.LayoutParams(-1, -1))
+        lista.visibility = View.GONE
+        contenido.addView(lista, FrameLayout.LayoutParams(-1, -1))
+
+        fun mostrarPestana(info: Boolean) {
+            infoScroll.visibility = if (info) View.VISIBLE else View.GONE
+            lista.visibility = if (info) View.GONE else View.VISIBLE
+            tabInfo.setTextColor(if (info) Ui.ROSA else Color.LTGRAY)
+            tabEpisodios.setTextColor(if (info) Color.LTGRAY else Ui.ROSA)
+            lineaInfo.setBackgroundColor(if (info) Ui.ROSA else Color.TRANSPARENT)
+            lineaEpisodios.setBackgroundColor(if (info) Color.TRANSPARENT else Ui.ROSA)
+        }
+        tabInfo.setOnClickListener { mostrarPestana(true) }
+        tabEpisodios.setOnClickListener { mostrarPestana(false) }
+
+        raiz.addView(tabs, LinearLayout.LayoutParams(-1, dp(51)))
+        raiz.addView(contenido, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(raiz)
+
         ponerTextos()
         actualizarFav()
         calcularAccion()
@@ -148,7 +214,8 @@ class DetalleActivity : Activity() {
     private fun crearCabecera(): View {
         val cab = LinearLayout(this)
         cab.orientation = LinearLayout.VERTICAL
-        cab.setPadding(dp(16), dp(8), dp(16), 0)
+        cab.setPadding(dp(16), dp(8), dp(16), dp(16))
+        val itemActual = Repositorio.buscarItem(titulo, portada)
 
         // Portada completa (sin recortar ni desenfocar) + título y descripción
         val fila = LinearLayout(this)
@@ -245,55 +312,129 @@ class DetalleActivity : Activity() {
         botones.addView(botonLista, lpLista)
         cab.addView(botones)
 
-        // Título de la sección + botón para invertir el orden
-        val encabezado = LinearLayout(this)
-        encabezado.orientation = LinearLayout.HORIZONTAL
-        encabezado.gravity = Gravity.CENTER_VERTICAL
-        encabezado.setPadding(0, dp(24), 0, dp(8))
-
-        tvEps = TextView(this)
-        tvEps.text = "Episodios"
-        tvEps.setTextColor(Color.WHITE)
-        tvEps.textSize = 22f
-        tvEps.setTypeface(null, Typeface.BOLD)
-        encabezado.addView(
-            tvEps,
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        )
-
-        botonOrden = TextView(this)
-        botonOrden.text = if (descendente) "↓" else "↑"
-        botonOrden.setTextColor(Color.WHITE)
-        botonOrden.textSize = 26f
-        botonOrden.gravity = Gravity.CENTER
-        botonOrden.setPadding(dp(14), dp(4), dp(14), dp(4))
-        botonOrden.setOnClickListener {
-            descendente = !descendente
-            prefs.edit().putBoolean("eps_desc", descendente).apply()
-            botonOrden.text = if (descendente) "↓" else "↑"
-            adaptador.reordenar()
-            Toast.makeText(
-                this,
-                if (descendente) "Más recientes primero" else "Más antiguos primero",
-                Toast.LENGTH_SHORT
-            ).show()
+        // Información técnica del anime: queda dentro de INFO, separada de los episodios.
+        val detalles = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = Ui.fondo(this@DetalleActivity, Color.parseColor("#202020"), 8)
         }
-        encabezado.addView(botonOrden)
-        cab.addView(encabezado)
+        detalles.addView(TextView(this).apply {
+            text = "Detalles"
+            setTextColor(Ui.ROSA)
+            textSize = 21f
+            setTypeface(null, Typeface.BOLD)
+        })
+        fun campoDetalle(etiqueta: String, valor: String) {
+            if (valor.isBlank()) return
+            detalles.addView(TextView(this).apply {
+                text = etiqueta
+                setTextColor(Color.WHITE)
+                textSize = 16f
+                setTypeface(null, Typeface.BOLD)
+                setPadding(0, dp(10), 0, 0)
+            })
+            detalles.addView(TextView(this).apply {
+                text = valor
+                setTextColor(Color.LTGRAY)
+                textSize = 14f
+            })
+        }
+        campoDetalle("Tipo", itemActual?.tipo.orEmpty().ifBlank { "Anime" })
+        campoDetalle("Estado", itemActual?.estado.orEmpty())
+        campoDetalle("ID", itemActual?.id.orEmpty().ifBlank { idItem })
+        if (metaActual.isNotBlank()) campoDetalle("Información adicional", metaActual)
+        cab.addView(detalles, LinearLayout.LayoutParams(-1, -2).apply {
+            topMargin = dp(18)
+        })
 
-        // Sección de relacionados: combina los datos del módulo con relaciones automáticas
-        // obtenidas de AniList para temporadas, películas, OVAs y spin-offs.
+        val generos = itemActual?.generos.orEmpty()
+        if (generos.isNotEmpty()) {
+            val bloqueGeneros = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                background = Ui.fondo(this@DetalleActivity, Color.parseColor("#202020"), 8)
+            }
+            bloqueGeneros.addView(TextView(this).apply {
+                text = "Géneros"
+                setTextColor(Ui.ROSA)
+                textSize = 21f
+                setTypeface(null, Typeface.BOLD)
+            })
+            val filaGeneros = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, dp(8), 0, 0)
+            }
+            generos.forEach { genero ->
+                val etiqueta = TextView(this).apply {
+                    text = genero
+                    setTextColor(Color.WHITE)
+                    textSize = 13f
+                    setTypeface(null, Typeface.BOLD)
+                    gravity = Gravity.CENTER
+                    setPadding(dp(12), dp(7), dp(12), dp(7))
+                    background = Ui.fondo(this@DetalleActivity, Ui.ROSA, 22)
+                }
+                val lp = LinearLayout.LayoutParams(-2, -2)
+                lp.rightMargin = dp(6)
+                filaGeneros.addView(etiqueta, lp)
+            }
+            val scrollGeneros = HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(filaGeneros)
+            }
+            bloqueGeneros.addView(scrollGeneros)
+            cab.addView(bloqueGeneros, LinearLayout.LayoutParams(-1, -2).apply {
+                topMargin = dp(12)
+            })
+        }
+
+        // Relacionados permanece en INFO, debajo de los datos generales.
         val bloque = LinearLayout(this)
         bloque.orientation = LinearLayout.VERTICAL
         bloque.setPadding(0, dp(22), 0, dp(8))
         bloque.visibility = View.GONE
         bloqueRelacionados = bloque
         cab.addView(bloque)
-        val itemActual = Repositorio.buscarItem(titulo, portada)
         val declarados = itemActual?.relacionados.orEmpty()
         if (declarados.isNotEmpty()) mostrarFilasRelacionadas(bloque, declarados)
 
         return cab
+    }
+
+    private fun crearCabeceraEpisodios(): View {
+        val encabezado = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), dp(18), dp(16), dp(10))
+            setBackgroundColor(Ui.FONDO)
+        }
+        tvEps = TextView(this).apply {
+            text = if (episodios.isEmpty()) "Episodios" else "Episodios (${episodios.size})"
+            setTextColor(Color.WHITE)
+            textSize = 22f
+            setTypeface(null, Typeface.BOLD)
+        }
+        encabezado.addView(tvEps, LinearLayout.LayoutParams(0, -2, 1f))
+        botonOrden = TextView(this).apply {
+            text = if (descendente) "↓" else "↑"
+            setTextColor(Color.WHITE)
+            textSize = 26f
+            gravity = Gravity.CENTER
+            setPadding(dp(14), dp(4), dp(14), dp(4))
+            setOnClickListener {
+                descendente = !descendente
+                prefs.edit().putBoolean("eps_desc", descendente).apply()
+                text = if (descendente) "↓" else "↑"
+                adaptador.reordenar()
+                Toast.makeText(
+                    this@DetalleActivity,
+                    if (descendente) "Más recientes primero" else "Más antiguos primero",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+        encabezado.addView(botonOrden)
+        return encabezado
     }
 
     private fun mostrarFilasRelacionadas(contenedor: LinearLayout, relacionados: List<Relacionado>) {
