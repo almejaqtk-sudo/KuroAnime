@@ -25,6 +25,9 @@ import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
 class DetalleActivity : Activity() {
 
@@ -57,6 +60,8 @@ class DetalleActivity : Activity() {
     private var episodios: List<Episodio> = emptyList()
     private var indiceAccion = 0
     private var descendente = true
+    private var bloqueRelacionados: LinearLayout? = null
+    private var consultandoRelacionados = false
 
     private val colorFila = Color.parseColor("#2B2840")
     private val colorFilaVisto = Color.parseColor("#1D1A2B")
@@ -137,6 +142,7 @@ class DetalleActivity : Activity() {
         actualizarFav()
         calcularAccion()
         if (episodios.isEmpty()) cargarEpisodiosRemotos() else prefetch()
+        cargarRelacionadosAutomaticos()
     }
 
     private fun crearCabecera(): View {
@@ -275,57 +281,209 @@ class DetalleActivity : Activity() {
         encabezado.addView(botonOrden)
         cab.addView(encabezado)
 
-        // Secuelas, precuelas y otros títulos relacionados que declare el módulo.
+        // Sección de relacionados: combina los datos del módulo con relaciones automáticas
+        // obtenidas de AniList para temporadas, películas, OVAs y spin-offs.
+        val bloque = LinearLayout(this)
+        bloque.orientation = LinearLayout.VERTICAL
+        bloque.setPadding(0, dp(22), 0, dp(8))
+        bloque.visibility = View.GONE
+        bloqueRelacionados = bloque
+        cab.addView(bloque)
         val itemActual = Repositorio.buscarItem(titulo, portada)
-        val relacionados = itemActual?.relacionados.orEmpty()
-        if (relacionados.isNotEmpty()) {
-            val bloque = LinearLayout(this)
-            bloque.orientation = LinearLayout.VERTICAL
-            bloque.setPadding(0, dp(22), 0, dp(8))
-            val encabezadoRelacion = TextView(this)
-            encabezadoRelacion.text = "Relacionados"
-            encabezadoRelacion.setTextColor(Ui.ROSA)
-            encabezadoRelacion.textSize = 22f
-            encabezadoRelacion.setTypeface(null, Typeface.BOLD)
-            bloque.addView(encabezadoRelacion)
-            relacionados.forEach { rel ->
-                val filaRel = LinearLayout(this)
-                filaRel.orientation = LinearLayout.VERTICAL
-                filaRel.setPadding(dp(14), dp(12), dp(14), dp(12))
-                filaRel.background = Ui.fondo(this, colorFila, 14)
-                val nombreRel = TextView(this)
-                nombreRel.text = rel.titulo
-                nombreRel.setTextColor(Color.WHITE)
-                nombreRel.textSize = 17f
-                nombreRel.setTypeface(null, Typeface.BOLD)
-                filaRel.addView(nombreRel)
-                if (rel.relacion.isNotEmpty()) {
-                    val tipoRel = TextView(this)
-                    tipoRel.text = rel.relacion
-                    tipoRel.setTextColor(colorGris)
-                    tipoRel.textSize = 14f
-                    filaRel.addView(tipoRel)
-                }
-                filaRel.setOnClickListener {
-                    val destino = Repositorio.buscarItem(rel.titulo, rel.portada)
-                        ?: Repositorio.buscarItem(rel.titulo)
-                    val it = Intent(this, DetalleActivity::class.java)
-                    it.putExtra("item", destino?.titulo ?: rel.titulo)
-                    it.putExtra("portada", destino?.portada ?: rel.portada)
-                    it.putExtra("descripcion", destino?.descripcion ?: "")
-                    it.putExtra("episodios", ModuloParser.episodiosAJson(destino?.episodios ?: emptyList()))
-                    it.putExtra("id", destino?.id ?: rel.id)
-                    it.putExtra("fuente", destino?.fuente ?: rel.fuente.ifEmpty { itemActual?.fuente ?: fuenteItem })
-                    startActivity(it)
-                }
-                val lpRel = LinearLayout.LayoutParams(-1, -2)
-                lpRel.topMargin = dp(8)
-                bloque.addView(filaRel, lpRel)
-            }
-            cab.addView(bloque)
-        }
+        val declarados = itemActual?.relacionados.orEmpty()
+        if (declarados.isNotEmpty()) mostrarFilasRelacionadas(bloque, declarados)
 
         return cab
+    }
+
+    private fun mostrarFilasRelacionadas(contenedor: LinearLayout, relacionados: List<Relacionado>) {
+        if (relacionados.isEmpty()) return
+        contenedor.removeAllViews()
+        contenedor.visibility = View.VISIBLE
+        contenedor.addView(TextView(this).apply {
+            text = "Relacionados"
+            setTextColor(Ui.ROSA)
+            textSize = 22f
+            setTypeface(null, Typeface.BOLD)
+        })
+        relacionados.distinctBy { it.titulo.lowercase() }.forEach { rel ->
+            val fila = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(8), 0, dp(8))
+                isClickable = true
+                isFocusable = true
+            }
+            val imagen = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                background = Ui.fondo(this@DetalleActivity, colorFila, 8)
+                Ui.redondear(this, dp(8).toFloat())
+            }
+            fila.addView(imagen, LinearLayout.LayoutParams(dp(78), dp(104)))
+            if (rel.portada.isNotEmpty()) ImageLoader.cargar(rel.portada, imagen)
+            val textos = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), 0, dp(8), 0)
+            }
+            textos.addView(TextView(this).apply {
+                text = rel.titulo
+                setTextColor(Color.WHITE)
+                textSize = 17f
+                setTypeface(null, Typeface.BOLD)
+                maxLines = 2
+                ellipsize = TextUtils.TruncateAt.END
+            })
+            if (rel.relacion.isNotEmpty()) {
+                textos.addView(TextView(this).apply {
+                    text = rel.relacion
+                    setTextColor(colorGris)
+                    textSize = 14f
+                    setPadding(0, dp(6), 0, 0)
+                })
+            }
+            fila.addView(textos, LinearLayout.LayoutParams(0, -2, 1f))
+            fila.setOnClickListener { abrirRelacionado(rel) }
+            contenedor.addView(fila)
+            contenedor.addView(View(this).apply { setBackgroundColor(Color.parseColor("#393544")) },
+                LinearLayout.LayoutParams(-1, dp(1)))
+        }
+    }
+
+    private fun abrirRelacionado(rel: Relacionado) {
+        val local = Repositorio.buscarItem(rel.titulo, rel.portada) ?: Repositorio.buscarItem(rel.titulo)
+        if (local != null) {
+            abrirDetalleRelacionado(local)
+            return
+        }
+        if (fuenteItem.isBlank()) {
+            Toast.makeText(this, "Busca «${rel.titulo}» en el catálogo para abrirlo.", Toast.LENGTH_LONG).show()
+            return
+        }
+        Toast.makeText(this, "Buscando ${rel.titulo}…", Toast.LENGTH_SHORT).show()
+        Thread {
+            val encontrado = try {
+                val resultados = Motores.buscar(fuenteItem, rel.titulo)
+                resultados.firstOrNull { it.titulo.equals(rel.titulo, ignoreCase = true) }
+                    ?: resultados.firstOrNull()
+            } catch (_: Exception) { null }
+            runOnUiThread {
+                if (encontrado != null && !isFinishing) {
+                    Repositorio.agregarARegistro(listOf(encontrado))
+                    abrirDetalleRelacionado(encontrado)
+                } else {
+                    Toast.makeText(this, "No se encontró en el módulo actual. Prueba desde Buscar.", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun abrirDetalleRelacionado(item: Item) {
+        val intent = Intent(this, DetalleActivity::class.java)
+        intent.putExtra("item", item.titulo)
+        intent.putExtra("portada", item.portada)
+        intent.putExtra("descripcion", item.descripcion)
+        intent.putExtra("episodios", ModuloParser.episodiosAJson(item.episodios))
+        intent.putExtra("id", item.id)
+        intent.putExtra("fuente", item.fuente)
+        startActivity(intent)
+    }
+
+    private fun cargarRelacionadosAutomaticos() {
+        if (consultandoRelacionados) return
+        consultandoRelacionados = true
+        Thread {
+            try {
+                val relaciones = consultarAniList(titulo)
+                runOnUiThread {
+                    consultandoRelacionados = false
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    val existentes = Repositorio.buscarItem(titulo, portada)?.relacionados.orEmpty()
+                    val combinados = (existentes + relaciones).distinctBy { it.titulo.trim().lowercase() }
+                    if (combinados.isNotEmpty()) bloqueRelacionados?.let {
+                        mostrarFilasRelacionadas(it, combinados)
+                    }
+                }
+            } catch (_: Exception) {
+                runOnUiThread { consultandoRelacionados = false }
+            }
+        }.start()
+    }
+
+    // AniList entrega en una sola consulta el anime y las portadas/tipos de todas sus relaciones.
+    // No depende de que cada módulo declare manualmente sus secuelas y películas.
+    private fun consultarAniList(nombre: String): List<Relacionado> {
+        val query = """
+            query (${'$'}search: String) {
+              Media(search: ${'$'}search, type: ANIME, sort: SEARCH_MATCH) {
+                id
+                relations {
+                  edges {
+                    relationType
+                    node {
+                      id
+                      type
+                      format
+                      title { romaji english native }
+                      coverImage { medium }
+                    }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val body = JSONObject().put("query", query)
+            .put("variables", JSONObject().put("search", nombre)).toString()
+        val connection = URL("https://graphql.anilist.co").openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.connectTimeout = 12000
+        connection.readTimeout = 15000
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("User-Agent", "KuroAnime/1.0")
+        try {
+            connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            if (connection.responseCode !in 200..299) return emptyList()
+            val response = connection.inputStream.bufferedReader().use { it.readText() }
+            val media = JSONObject(response).optJSONObject("data")?.optJSONObject("Media")
+                ?: return emptyList()
+            val mediaId = media.optInt("id", -1)
+            val edges = media.optJSONObject("relations")?.optJSONArray("edges") ?: return emptyList()
+            val etiquetas = mapOf(
+                "PREQUEL" to "Precuela", "SEQUEL" to "Secuela",
+                "PARENT" to "Historia principal", "SIDE_STORY" to "Historia secundaria",
+                "SUMMARY" to "Resumen", "ALTERNATIVE" to "Otra versión",
+                "SPIN_OFF" to "Spin-off", "ADAPTATION" to "Adaptación",
+                "OTHER" to "Relacionado", "COMPILATION" to "Recopilación",
+                "CONTAINS" to "Incluye"
+            )
+            val salida = mutableListOf<Relacionado>()
+            for (i in 0 until edges.length()) {
+                val edge = edges.optJSONObject(i) ?: continue
+                val node = edge.optJSONObject("node") ?: continue
+                if (node.optString("type") != "ANIME" || node.optInt("id", -1) == mediaId) continue
+                val titles = node.optJSONObject("title")
+                val title = titles?.optString("english").orEmpty()
+                    .ifBlank { titles?.optString("romaji").orEmpty() }
+                    .ifBlank { titles?.optString("native").orEmpty() }
+                if (title.isBlank()) continue
+                val relation = etiquetas[edge.optString("relationType")] ?: "Relacionado"
+                val format = node.optString("format")
+                val label = when (format) {
+                    "MOVIE" -> "$relation · Película"
+                    "OVA" -> "$relation · OVA"
+                    "ONA" -> "$relation · ONA"
+                    "SPECIAL" -> "$relation · Especial"
+                    else -> relation
+                }
+                val cover = node.optJSONObject("coverImage")?.optString("medium").orEmpty()
+                salida.add(Relacionado(title, label, cover, "", ""))
+            }
+            return salida
+        } finally {
+            connection.disconnect()
+        }
     }
 
     private fun ponerTextos() {

@@ -504,6 +504,10 @@ object Motores {
     fun cargar(codigo: String): Modulo =
         if (MotorHub.esFormatoHub(codigo)) MotorHub.cargar(codigo) else MotorJs.cargar(codigo)
 
+    fun buscar(codigo: String, consulta: String): List<Item> =
+        if (MotorHub.esFormatoHub(codigo)) MotorHub.buscar(codigo, consulta, emptyMap(), 1).orEmpty()
+        else MotorJs.buscar(codigo, consulta)
+
     fun episodios(codigo: String, id: String): List<Episodio> =
         if (MotorHub.esFormatoHub(codigo)) MotorHub.episodios(codigo, id) else MotorJs.episodios(codigo, id)
 }

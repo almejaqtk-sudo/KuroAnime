@@ -140,6 +140,24 @@ function log(x) { __log(String(x)); }
         items
     }
 
+    // Búsqueda opcional para abrir precuelas/secuelas encontradas por el catálogo de relaciones.
+    fun buscar(codigo: String, consulta: String): List<Item> = conMotor { cx, scope ->
+        val nombre = prepararModulo(cx, scope, codigo)
+        val metodo = evaluar(cx, scope,
+            "typeof modulo.buscar === 'function' ? 'buscar' : (typeof modulo.search === 'function' ? 'search' : '')")
+        if (metodo.isEmpty()) return@conMotor emptyList<Item>()
+        val texto = evaluar(cx, scope,
+            "JSON.stringify(modulo[" + JSONObject.quote(metodo) + "](" + JSONObject.quote(consulta) + "))")
+        if (texto == "undefined" || texto == "null") return@conMotor emptyList<Item>()
+        val arr = JSONArray(texto)
+        val items = mutableListOf<Item>()
+        for (i in 0 until arr.length()) {
+            val obj = arr.optJSONObject(i) ?: continue
+            items.add(ModuloParser.itemDeObjeto(obj, nombre, codigo))
+        }
+        items
+    }
+
     // Llama a modulo.episodios(id) cuando abres un título
     fun episodios(codigo: String, id: String): List<Episodio> = conMotor { cx, scope ->
         prepararModulo(cx, scope, codigo)
