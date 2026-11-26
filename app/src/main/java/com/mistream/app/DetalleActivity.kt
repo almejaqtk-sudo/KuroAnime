@@ -132,88 +132,37 @@ class DetalleActivity : Activity() {
             )
         )
 
-        // Lista de episodios integrada debajo de los botones principales.
+        // Lista única: cabecera del anime, encabezado de episodios,
+        // episodios y al final el bloque de animes relacionados.
         lista = ListView(this)
         lista.divider = null
         lista.dividerHeight = 0
         lista.setBackgroundColor(Ui.FONDO)
         lista.selector = ColorDrawable(Color.TRANSPARENT)
-        lista.isNestedScrollingEnabled = false
+        lista.isNestedScrollingEnabled = true
+
+        val contenedorRelacionados = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(20))
+            visibility = View.GONE
+            setBackgroundColor(Ui.FONDO)
+        }
+        bloqueRelacionados = contenedorRelacionados
+
+        lista.addHeaderView(crearCabecera(), null, false)
         lista.addHeaderView(crearCabeceraEpisodios(), null, false)
+        lista.addFooterView(contenedorRelacionados, null, false)
         adaptador = AdaptadorEpisodios()
         lista.adapter = adaptador
         lista.setOnItemClickListener { _, _, pos, _ ->
             val real = adaptador.indiceReal(pos - lista.headerViewsCount)
             if (real >= 0) reproducir(real)
         }
-        ajustarAlturaLista()
+        raiz.addView(
+            lista,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        )
 
-        val tabInfo = TextView(this).apply {
-            text = "INFO"
-            textSize = 14f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setTextColor(Ui.ROSA)
-            isAllCaps = true
-        }
-        val tabRelacionados = TextView(this).apply {
-            text = "RELACIONADOS"
-            textSize = 14f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setTextColor(Color.LTGRAY)
-            isAllCaps = true
-        }
-        val lineaInfo = View(this).apply { setBackgroundColor(Ui.ROSA) }
-        val lineaRelacionados = View(this).apply { setBackgroundColor(Color.TRANSPARENT) }
-        val tabs = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Color.parseColor("#202020"))
-        }
-        fun agregarPestana(texto: TextView, linea: View) {
-            val columna = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                addView(texto, LinearLayout.LayoutParams(-1, dp(48)))
-                addView(linea, LinearLayout.LayoutParams(-1, dp(3)))
-            }
-            tabs.addView(columna, LinearLayout.LayoutParams(0, dp(51), 1f))
-        }
-        agregarPestana(tabInfo, lineaInfo)
-        agregarPestana(tabRelacionados, lineaRelacionados)
-
-        val contenido = FrameLayout(this)
-        val infoScroll = ScrollView(this).apply {
-            isFillViewport = true
-            setBackgroundColor(Ui.FONDO)
-            addView(crearCabecera())
-        }
-        val relacionadosScroll = ScrollView(this).apply {
-            isFillViewport = true
-            setBackgroundColor(Ui.FONDO)
-        }
-        val contenedorRelacionados = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(8), dp(16), dp(16))
-        }
-        bloqueRelacionados = contenedorRelacionados
-        relacionadosScroll.addView(contenedorRelacionados)
-        contenido.addView(infoScroll, FrameLayout.LayoutParams(-1, -1))
-        contenido.addView(relacionadosScroll, FrameLayout.LayoutParams(-1, -1))
-        relacionadosScroll.visibility = View.GONE
-
-        fun mostrarPestana(info: Boolean) {
-            infoScroll.visibility = if (info) View.VISIBLE else View.GONE
-            relacionadosScroll.visibility = if (info) View.GONE else View.VISIBLE
-            tabInfo.setTextColor(if (info) Ui.ROSA else Color.LTGRAY)
-            tabRelacionados.setTextColor(if (info) Color.LTGRAY else Ui.ROSA)
-            lineaInfo.setBackgroundColor(if (info) Ui.ROSA else Color.TRANSPARENT)
-            lineaRelacionados.setBackgroundColor(if (info) Color.TRANSPARENT else Ui.ROSA)
-        }
-        tabInfo.setOnClickListener { mostrarPestana(true) }
-        tabRelacionados.setOnClickListener { mostrarPestana(false) }
-
-        raiz.addView(tabs, LinearLayout.LayoutParams(-1, dp(51)))
-        raiz.addView(contenido, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(raiz)
 
         ponerTextos()
@@ -324,9 +273,6 @@ class DetalleActivity : Activity() {
         botones.addView(botonLista, lpLista)
         cab.addView(botones)
 
-        // Los episodios quedan visibles en INFO, inmediatamente debajo de los botones.
-        cab.addView(lista, LinearLayout.LayoutParams(-1, -2))
-
         // Información técnica del anime.
         val detalles = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -403,7 +349,7 @@ class DetalleActivity : Activity() {
             })
         }
 
-        // Las relaciones se muestran en la pestaña independiente RELACIONADOS.
+        // Las relaciones se muestran al final de la lista de episodios.
         val declarados = itemActual?.relacionados.orEmpty()
         if (declarados.isNotEmpty()) bloqueRelacionados?.let {
             mostrarFilasRelacionadas(it, declarados)
@@ -449,14 +395,9 @@ class DetalleActivity : Activity() {
     }
 
     private fun ajustarAlturaLista() {
-        if (!::lista.isInitialized || !::adaptador.isInitialized) return
-        // ListView está dentro del ScrollView de INFO; fijamos su altura para que
-        // todos los episodios se desplacen junto con el resto del contenido.
-        val altoCabecera = dp(58)
-        val altoFila = dp(76)
-        val params = lista.layoutParams ?: LinearLayout.LayoutParams(-1, -2)
-        params.height = altoCabecera + (adaptador.count * altoFila)
-        lista.layoutParams = params
+        // La lista ocupa el espacio disponible y gestiona su propio desplazamiento.
+        // El bloque de relacionados está agregado como footer, después del último episodio.
+        if (!::lista.isInitialized) return
         lista.requestLayout()
     }
 
@@ -513,6 +454,8 @@ class DetalleActivity : Activity() {
             contenedor.addView(View(this).apply { setBackgroundColor(Color.parseColor("#393544")) },
                 LinearLayout.LayoutParams(-1, dp(1)))
         }
+        contenedor.requestLayout()
+        if (::lista.isInitialized) lista.requestLayout()
     }
 
     private fun abrirRelacionado(rel: Relacionado) {
