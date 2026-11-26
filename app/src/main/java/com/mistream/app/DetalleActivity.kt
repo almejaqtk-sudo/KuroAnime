@@ -132,12 +132,13 @@ class DetalleActivity : Activity() {
             )
         )
 
-        // Pestañas INFO / EPISODIOS: separan los datos del anime de su lista de capítulos.
+        // Lista de episodios integrada debajo de los botones principales.
         lista = ListView(this)
         lista.divider = null
         lista.dividerHeight = 0
         lista.setBackgroundColor(Ui.FONDO)
         lista.selector = ColorDrawable(Color.TRANSPARENT)
+        lista.isNestedScrollingEnabled = false
         lista.addHeaderView(crearCabeceraEpisodios(), null, false)
         adaptador = AdaptadorEpisodios()
         lista.adapter = adaptador
@@ -145,6 +146,7 @@ class DetalleActivity : Activity() {
             val real = adaptador.indiceReal(pos - lista.headerViewsCount)
             if (real >= 0) reproducir(real)
         }
+        ajustarAlturaLista()
 
         val tabInfo = TextView(this).apply {
             text = "INFO"
@@ -154,8 +156,8 @@ class DetalleActivity : Activity() {
             setTextColor(Ui.ROSA)
             isAllCaps = true
         }
-        val tabEpisodios = TextView(this).apply {
-            text = "EPISODIOS"
+        val tabRelacionados = TextView(this).apply {
+            text = "RELACIONADOS"
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
@@ -163,21 +165,21 @@ class DetalleActivity : Activity() {
             isAllCaps = true
         }
         val lineaInfo = View(this).apply { setBackgroundColor(Ui.ROSA) }
-        val lineaEpisodios = View(this).apply { setBackgroundColor(Color.TRANSPARENT) }
+        val lineaRelacionados = View(this).apply { setBackgroundColor(Color.TRANSPARENT) }
         val tabs = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(Color.parseColor("#202020"))
         }
-        fun agregarPestana(texto: TextView, linea: View): LinearLayout {
-            return LinearLayout(this).apply {
+        fun agregarPestana(texto: TextView, linea: View) {
+            val columna = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 addView(texto, LinearLayout.LayoutParams(-1, dp(48)))
                 addView(linea, LinearLayout.LayoutParams(-1, dp(3)))
-                tabs.addView(this, LinearLayout.LayoutParams(0, dp(51), 1f))
             }
+            tabs.addView(columna, LinearLayout.LayoutParams(0, dp(51), 1f))
         }
         agregarPestana(tabInfo, lineaInfo)
-        agregarPestana(tabEpisodios, lineaEpisodios)
+        agregarPestana(tabRelacionados, lineaRelacionados)
 
         val contenido = FrameLayout(this)
         val infoScroll = ScrollView(this).apply {
@@ -185,20 +187,30 @@ class DetalleActivity : Activity() {
             setBackgroundColor(Ui.FONDO)
             addView(crearCabecera())
         }
+        val relacionadosScroll = ScrollView(this).apply {
+            isFillViewport = true
+            setBackgroundColor(Ui.FONDO)
+        }
+        val contenedorRelacionados = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(8), dp(16), dp(16))
+        }
+        bloqueRelacionados = contenedorRelacionados
+        relacionadosScroll.addView(contenedorRelacionados)
         contenido.addView(infoScroll, FrameLayout.LayoutParams(-1, -1))
-        lista.visibility = View.GONE
-        contenido.addView(lista, FrameLayout.LayoutParams(-1, -1))
+        contenido.addView(relacionadosScroll, FrameLayout.LayoutParams(-1, -1))
+        relacionadosScroll.visibility = View.GONE
 
         fun mostrarPestana(info: Boolean) {
             infoScroll.visibility = if (info) View.VISIBLE else View.GONE
-            lista.visibility = if (info) View.GONE else View.VISIBLE
+            relacionadosScroll.visibility = if (info) View.GONE else View.VISIBLE
             tabInfo.setTextColor(if (info) Ui.ROSA else Color.LTGRAY)
-            tabEpisodios.setTextColor(if (info) Color.LTGRAY else Ui.ROSA)
+            tabRelacionados.setTextColor(if (info) Color.LTGRAY else Ui.ROSA)
             lineaInfo.setBackgroundColor(if (info) Ui.ROSA else Color.TRANSPARENT)
-            lineaEpisodios.setBackgroundColor(if (info) Color.TRANSPARENT else Ui.ROSA)
+            lineaRelacionados.setBackgroundColor(if (info) Color.TRANSPARENT else Ui.ROSA)
         }
         tabInfo.setOnClickListener { mostrarPestana(true) }
-        tabEpisodios.setOnClickListener { mostrarPestana(false) }
+        tabRelacionados.setOnClickListener { mostrarPestana(false) }
 
         raiz.addView(tabs, LinearLayout.LayoutParams(-1, dp(51)))
         raiz.addView(contenido, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -312,7 +324,10 @@ class DetalleActivity : Activity() {
         botones.addView(botonLista, lpLista)
         cab.addView(botones)
 
-        // Información técnica del anime: queda dentro de INFO, separada de los episodios.
+        // Los episodios quedan visibles en INFO, inmediatamente debajo de los botones.
+        cab.addView(lista, LinearLayout.LayoutParams(-1, -2))
+
+        // Información técnica del anime.
         val detalles = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), dp(12), dp(14), dp(12))
@@ -388,15 +403,11 @@ class DetalleActivity : Activity() {
             })
         }
 
-        // Relacionados permanece en INFO, debajo de los datos generales.
-        val bloque = LinearLayout(this)
-        bloque.orientation = LinearLayout.VERTICAL
-        bloque.setPadding(0, dp(22), 0, dp(8))
-        bloque.visibility = View.GONE
-        bloqueRelacionados = bloque
-        cab.addView(bloque)
+        // Las relaciones se muestran en la pestaña independiente RELACIONADOS.
         val declarados = itemActual?.relacionados.orEmpty()
-        if (declarados.isNotEmpty()) mostrarFilasRelacionadas(bloque, declarados)
+        if (declarados.isNotEmpty()) bloqueRelacionados?.let {
+            mostrarFilasRelacionadas(it, declarados)
+        }
 
         return cab
     }
@@ -437,6 +448,18 @@ class DetalleActivity : Activity() {
         return encabezado
     }
 
+    private fun ajustarAlturaLista() {
+        if (!::lista.isInitialized || !::adaptador.isInitialized) return
+        // ListView está dentro del ScrollView de INFO; fijamos su altura para que
+        // todos los episodios se desplacen junto con el resto del contenido.
+        val altoCabecera = dp(58)
+        val altoFila = dp(76)
+        val params = lista.layoutParams ?: LinearLayout.LayoutParams(-1, -2)
+        params.height = altoCabecera + (adaptador.count * altoFila)
+        lista.layoutParams = params
+        lista.requestLayout()
+    }
+
     private fun mostrarFilasRelacionadas(contenedor: LinearLayout, relacionados: List<Relacionado>) {
         if (relacionados.isEmpty()) return
         contenedor.removeAllViews()
@@ -446,6 +469,7 @@ class DetalleActivity : Activity() {
             setTextColor(Ui.ROSA)
             textSize = 22f
             setTypeface(null, Typeface.BOLD)
+            setPadding(0, dp(8), 0, dp(8))
         })
         relacionados.distinctBy { it.titulo.lowercase() }.forEach { rel ->
             val fila = LinearLayout(this).apply {
@@ -757,6 +781,7 @@ class DetalleActivity : Activity() {
                         ponerTextos()
                     }
                     adaptador.reordenar()
+                    ajustarAlturaLista()
                     calcularAccion()
                     prefetch()
                 }
@@ -910,6 +935,7 @@ class DetalleActivity : Activity() {
             val base = episodios.indices.toList()
             orden = if (descendente) base.reversed() else base
             notifyDataSetChanged()
+            if (::lista.isInitialized) ajustarAlturaLista()
         }
 
         fun indiceReal(pos: Int): Int = orden.getOrElse(pos) { -1 }
