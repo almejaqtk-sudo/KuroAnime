@@ -273,40 +273,7 @@ class DetalleActivity : Activity() {
         botones.addView(botonLista, lpLista)
         cab.addView(botones)
 
-        // Información técnica del anime.
-        val detalles = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            background = Ui.fondo(this@DetalleActivity, Color.parseColor("#202020"), 8)
-        }
-        detalles.addView(TextView(this).apply {
-            text = "Detalles"
-            setTextColor(Ui.ROSA)
-            textSize = 21f
-            setTypeface(null, Typeface.BOLD)
-        })
-        fun campoDetalle(etiqueta: String, valor: String) {
-            if (valor.isBlank()) return
-            detalles.addView(TextView(this).apply {
-                text = etiqueta
-                setTextColor(Color.WHITE)
-                textSize = 16f
-                setTypeface(null, Typeface.BOLD)
-                setPadding(0, dp(10), 0, 0)
-            })
-            detalles.addView(TextView(this).apply {
-                text = valor
-                setTextColor(Color.LTGRAY)
-                textSize = 14f
-            })
-        }
-        campoDetalle("Tipo", itemActual?.tipo.orEmpty().ifBlank { "Anime" })
-        campoDetalle("Estado", itemActual?.estado.orEmpty())
-        campoDetalle("ID", itemActual?.id.orEmpty().ifBlank { idItem })
-        if (metaActual.isNotBlank()) campoDetalle("Información adicional", metaActual)
-        cab.addView(detalles, LinearLayout.LayoutParams(-1, -2).apply {
-            topMargin = dp(18)
-        })
+        // La tarjeta de detalles técnicos se eliminó para simplificar la ficha.
 
         val generos = itemActual?.generos.orEmpty()
         if (generos.isNotEmpty()) {
