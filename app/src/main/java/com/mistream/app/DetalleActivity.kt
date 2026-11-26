@@ -194,7 +194,7 @@ class DetalleActivity : Activity() {
         )
         cab.addView(fila)
 
-        // Botones: Ver desde el principio / Reanudar  +  Mi lista
+        // Botones: Ver desde el principio / Reanudar + Favoritos
         val botones = LinearLayout(this)
         botones.orientation = LinearLayout.HORIZONTAL
         botones.gravity = Gravity.CENTER_VERTICAL
@@ -214,7 +214,7 @@ class DetalleActivity : Activity() {
         botones.addView(botonVer, LinearLayout.LayoutParams(0, dp(54), 1f))
 
         botonLista = TextView(this)
-        botonLista.text = "☆ Mi lista"
+        botonLista.text = "☆ Favoritos"
         botonLista.setTextColor(Color.WHITE)
         botonLista.textSize = 16f
         botonLista.setTypeface(null, Typeface.BOLD)
@@ -224,11 +224,16 @@ class DetalleActivity : Activity() {
         botonLista.setOnClickListener {
             val ahora = Favoritos.alternar(prefs, titulo)
             actualizarFav()
-            Toast.makeText(
-                this,
-                if (ahora) "Agregado a Mi lista" else "Quitado de Mi lista",
-                Toast.LENGTH_SHORT
-            ).show()
+            if (ahora) {
+                val carpetas = Favoritos.nombresCarpetas(prefs)
+                if (carpetas.isNotEmpty()) {
+                    AlertDialog.Builder(this).setTitle("Agregar a una carpeta")
+                        .setItems((listOf("Sin carpeta") + carpetas).toTypedArray()) { _, which ->
+                            if (which > 0) Favoritos.agregarACarpeta(prefs, carpetas[which - 1], titulo)
+                        }.setNegativeButton("Ahora no", null).show()
+                }
+            }
+            Toast.makeText(this, if (ahora) "Agregado a Favoritos" else "Quitado de Favoritos", Toast.LENGTH_SHORT).show()
         }
         val lpLista = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -274,6 +279,56 @@ class DetalleActivity : Activity() {
         encabezado.addView(botonOrden)
         cab.addView(encabezado)
 
+        // Secuelas, precuelas y otros títulos relacionados que declare el módulo.
+        val itemActual = Repositorio.buscarItem(titulo, portada)
+        val relacionados = itemActual?.relacionados.orEmpty()
+        if (relacionados.isNotEmpty()) {
+            val bloque = LinearLayout(this)
+            bloque.orientation = LinearLayout.VERTICAL
+            bloque.setPadding(0, dp(22), 0, dp(8))
+            val encabezadoRelacion = TextView(this)
+            encabezadoRelacion.text = "Relacionados"
+            encabezadoRelacion.setTextColor(Ui.ROSA)
+            encabezadoRelacion.textSize = 22f
+            encabezadoRelacion.setTypeface(null, Typeface.BOLD)
+            bloque.addView(encabezadoRelacion)
+            relacionados.forEach { rel ->
+                val filaRel = LinearLayout(this)
+                filaRel.orientation = LinearLayout.VERTICAL
+                filaRel.setPadding(dp(14), dp(12), dp(14), dp(12))
+                filaRel.background = Ui.fondo(this, colorFila, 14)
+                val nombreRel = TextView(this)
+                nombreRel.text = rel.titulo
+                nombreRel.setTextColor(Color.WHITE)
+                nombreRel.textSize = 17f
+                nombreRel.setTypeface(null, Typeface.BOLD)
+                filaRel.addView(nombreRel)
+                if (rel.relacion.isNotEmpty()) {
+                    val tipoRel = TextView(this)
+                    tipoRel.text = rel.relacion
+                    tipoRel.setTextColor(colorGris)
+                    tipoRel.textSize = 14f
+                    filaRel.addView(tipoRel)
+                }
+                filaRel.setOnClickListener {
+                    val destino = Repositorio.buscarItem(rel.titulo, rel.portada)
+                        ?: Repositorio.buscarItem(rel.titulo)
+                    val it = Intent(this, DetalleActivity::class.java)
+                    it.putExtra("item", destino?.titulo ?: rel.titulo)
+                    it.putExtra("portada", destino?.portada ?: rel.portada)
+                    it.putExtra("descripcion", destino?.descripcion ?: "")
+                    it.putExtra("episodios", ModuloParser.episodiosAJson(destino?.episodios ?: emptyList()))
+                    it.putExtra("id", destino?.id ?: rel.id)
+                    it.putExtra("fuente", destino?.fuente ?: rel.fuente.ifEmpty { itemActual?.fuente ?: fuenteItem })
+                    startActivity(it)
+                }
+                val lpRel = LinearLayout.LayoutParams(-1, -2)
+                lpRel.topMargin = dp(8)
+                bloque.addView(filaRel, lpRel)
+            }
+            cab.addView(bloque)
+        }
+
         return cab
     }
 
@@ -286,7 +341,7 @@ class DetalleActivity : Activity() {
     private fun actualizarFav() {
         if (!::botonLista.isInitialized) return
         val fav = Favoritos.esFavorito(prefs, titulo)
-        botonLista.text = if (fav) "★ En mi lista" else "☆ Mi lista"
+        botonLista.text = if (fav) "★ En favoritos" else "☆ Favoritos"
         botonLista.setTextColor(if (fav) Ui.ROSA else Color.WHITE)
     }
 
@@ -403,11 +458,6 @@ class DetalleActivity : Activity() {
             // Módulos AnimeHub: primero se buscan los servidores que funcionan y se elige uno
             s.size == 1 && s[0].tipo == "hub" -> elegirServidorHub(indice, s[0])
             s.size > 1 -> elegirServidorLista(indice, s)
-            // Un solo servidor y modo externo elegido: se abre directo afuera
-            s.size == 1 && Servidores.usarExterno(this) -> {
-                Servidores.abrirExterno(this, s[0], tituloEpisodio(indice))
-                Progreso.guardarUltimo(prefs, titulo, episodios[indice].titulo)
-            }
             else -> abrirReproductor(indice)
         }
     }
@@ -493,12 +543,7 @@ class DetalleActivity : Activity() {
                 prefs.edit().putString("srv_pref", Servidores.claveVisible(servidores, which)).apply()
                 abrirReproductor(indice)
             },
-            {},
-            tituloEpisodio(indice),
-            { which ->
-                prefs.edit().putString("srv_pref", Servidores.claveVisible(servidores, which)).apply()
-                Progreso.guardarUltimo(prefs, titulo, episodios[indice].titulo)
-            }
+            {}
         )
     }
 

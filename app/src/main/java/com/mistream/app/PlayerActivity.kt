@@ -551,15 +551,7 @@ class PlayerActivity : Activity() {
                 prefs.edit().putString("srv_pref", Servidores.claveVisible(listaServidores, which)).apply()
                 usarServidor(which)
             },
-            { if (!reproduciendo) finish() },
-            itemTitulo + " - " + (episodios.getOrNull(indiceEp)?.titulo ?: ""),
-            { which ->
-                prefs.edit().putString("srv_pref", Servidores.claveVisible(listaServidores, which)).apply()
-                Progreso.guardarUltimo(prefs, itemTitulo, episodios[indiceEp].titulo)
-                // Se pausa el reproductor interno; si aún no se estaba viendo nada, se vuelve a la ficha
-                player?.pause()
-                if (!reproduciendo) finish()
-            }
+            { if (!reproduciendo) finish() }
         )
     }
 

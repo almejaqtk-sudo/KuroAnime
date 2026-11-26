@@ -21,6 +21,8 @@ data class ServerLink(
 
 data class Episodio(val titulo: String, val servidores: List<ServerLink>)
 
+data class Relacionado(val titulo: String, val relacion: String = "", val portada: String = "", val id: String = "", val fuente: String = "")
+
 data class Item(
     val titulo: String,
     val episodios: List<Episodio>,
@@ -32,7 +34,8 @@ data class Item(
     val estado: String = "",
     val ultimo: String = "",
     val id: String = "",
-    val fuente: String = ""
+    val fuente: String = "",
+    val relacionados: List<Relacionado> = emptyList()
 )
 
 // Un filtro que tiene el sitio (Género, Tipo, Estado, Año...). clave = nombre del parámetro del sitio,
@@ -128,6 +131,18 @@ object ModuloParser {
         if (ga != null) {
             for (g in 0 until ga.length()) gs.add(ga.getString(g))
         }
+        val relacionados = mutableListOf<Relacionado>()
+        val ra = oi.optJSONArray("relacionados")
+        if (ra != null) for (r in 0 until ra.length()) {
+            val ro = ra.optJSONObject(r) ?: continue
+            relacionados.add(Relacionado(
+                ro.optString("titulo", ""),
+                ro.optString("relacion", ro.optString("tipo", "")),
+                ro.optString("portada", ""),
+                ro.optString("id", ""),
+                ro.optString("fuente", "")
+            ))
+        }
         return Item(
             oi.getString("titulo"),
             eps,
@@ -139,7 +154,8 @@ object ModuloParser {
             oi.optString("estado", ""),
             oi.optString("ultimo", ""),
             oi.optString("id", ""),
-            fuente
+            fuente,
+            relacionados
         )
     }
 

@@ -171,11 +171,7 @@ object Servidores {
         lista: List<ServerLink>,
         preferido: String?,
         alElegir: (Int) -> Unit,
-        alCancelar: () -> Unit = {},
-        // Si se pasa el título, arriba aparece "Reproductor: Interno | Externo"
-        tituloVideo: String? = null,
-        // Se llama cuando el servidor se abrió en un reproductor externo
-        alAbrirExterno: (Int) -> Unit = {}
+        alCancelar: () -> Unit = {}
     ) {
         val dp = { v: Int -> Ui.dp(act, v) }
         val pantalla = act.resources.displayMetrics
@@ -210,48 +206,6 @@ object Servidores {
         cab.addView(x, LinearLayout.LayoutParams(dp(48), dp(48)))
         hoja.addView(cab)
 
-        // Interruptor Interno / Externo (se recuerda para la próxima vez)
-        val prefs = act.getSharedPreferences("mistream", Context.MODE_PRIVATE)
-        var externo = tituloVideo != null && prefs.getString(PREF_MODO, MODO_INTERNO) == MODO_EXTERNO
-        if (tituloVideo != null) {
-            val fila = LinearLayout(act)
-            fila.orientation = LinearLayout.HORIZONTAL
-            fila.gravity = Gravity.CENTER_VERTICAL
-            val et = TextView(act)
-            et.text = "Reproductor"
-            et.setTextColor(ANILLO)
-            et.textSize = 15f
-            fila.addView(et, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            val bInt = chip(act, "▶  Interno")
-            val bExt = chip(act, "↗  Externo")
-            val pintar = {
-                marcarChip(act, bInt, !externo)
-                marcarChip(act, bExt, externo)
-            }
-            bInt.setOnClickListener {
-                externo = false
-                prefs.edit().putString(PREF_MODO, MODO_INTERNO).apply()
-                pintar()
-            }
-            bExt.setOnClickListener {
-                externo = true
-                prefs.edit().putString(PREF_MODO, MODO_EXTERNO).apply()
-                pintar()
-            }
-            pintar()
-            fila.addView(bInt)
-            val lpExt = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lpExt.leftMargin = dp(8)
-            fila.addView(bExt, lpExt)
-            val lpFila = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lpFila.topMargin = dp(10)
-            hoja.addView(fila, lpFila)
-        }
-
         val nombres = nombresVisibles(lista)
         val marcado = indiceDePref(lista, preferido)
         val col = LinearLayout(act)
@@ -284,12 +238,7 @@ object Servidores {
                 fila.addView(circulo(act, true), 0, LinearLayout.LayoutParams(dp(36), dp(36)))
                 fila.postDelayed({
                     d.dismiss()
-                    if (externo && tituloVideo != null) {
-                        abrirExterno(act, s, tituloVideo)
-                        alAbrirExterno(i)
-                    } else {
-                        alElegir(i)
-                    }
+                    alElegir(i)
                 }, 140)
             }
             col.addView(fila, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -312,97 +261,6 @@ object Servidores {
             w.setWindowAnimations(android.R.style.Animation_InputMethod)
         }
         d.show()
-    }
-
-    // ---------- Reproductor externo (VLC, MX Player, Just Player, mpv...) ----------
-
-    const val PREF_MODO = "modo_reproductor"
-    const val MODO_INTERNO = "interno"
-    const val MODO_EXTERNO = "externo"
-
-    fun usarExterno(ctx: Context): Boolean =
-        ctx.getSharedPreferences("mistream", Context.MODE_PRIVATE)
-            .getString(PREF_MODO, MODO_INTERNO) == MODO_EXTERNO
-
-    private fun chip(act: Activity, texto: String): TextView {
-        val dp = { v: Int -> Ui.dp(act, v) }
-        val t = TextView(act)
-        t.text = texto
-        t.textSize = 15f
-        t.setTypeface(null, Typeface.BOLD)
-        t.gravity = Gravity.CENTER
-        t.maxLines = 1
-        t.setPadding(dp(14), dp(8), dp(14), dp(8))
-        return t
-    }
-
-    private fun marcarChip(act: Activity, t: TextView, activo: Boolean) {
-        val g = GradientDrawable()
-        g.cornerRadius = Ui.dp(act, 30).toFloat()
-        if (activo) {
-            g.setColor(Ui.ROSA)
-            t.setTextColor(Color.WHITE)
-        } else {
-            g.setColor(Color.TRANSPARENT)
-            g.setStroke(Ui.dp(act, 2), ANILLO)
-            t.setTextColor(ANILLO)
-        }
-        t.background = g
-    }
-
-    private fun tipoReal(s: ServerLink): String {
-        val t = s.tipo.lowercase()
-        if (t.isNotEmpty() && t != "auto") return t
-        return when {
-            s.url.contains(".m3u8", true) -> "hls"
-            s.url.contains(".mpd", true) -> "dash"
-            else -> "mp4"
-        }
-    }
-
-    // Abre el servidor fuera de la app. Los videos directos (mp4/m3u8) van a un reproductor de video
-    // con sus headers (Referer...); los servidores que son una página web (embed) se abren en el navegador.
-    fun abrirExterno(act: Activity, s: ServerLink, titulo: String) {
-        val tipo = tipoReal(s)
-        val uri = Uri.parse(s.url)
-        if (tipo == "embed" || tipo == "external" || tipo == "hub") {
-            Toast.makeText(act, "Este servidor es una página web: se abrirá en el navegador", Toast.LENGTH_LONG).show()
-            try {
-                act.startActivity(Intent.createChooser(Intent(Intent.ACTION_VIEW, uri), "Abrir con..."))
-            } catch (e: ActivityNotFoundException) {
-                Toast.makeText(act, "No hay navegador instalado", Toast.LENGTH_LONG).show()
-            }
-            return
-        }
-        val mime = when (tipo) {
-            "hls" -> "application/x-mpegURL"
-            "dash" -> "application/dash+xml"
-            else -> "video/*"
-        }
-        val i = Intent(Intent.ACTION_VIEW)
-        i.setDataAndType(uri, mime)
-        i.putExtra("title", titulo) // MX Player, VLC, Just Player
-        if (s.headers.isNotEmpty()) {
-            // MX Player / Just Player / mpv: ["Referer", "https://...", "User-Agent", "..."]
-            i.putExtra("headers", s.headers.flatMap { listOf(it.key, it.value) }.toTypedArray())
-        }
-        if (s.subtitulos.isNotEmpty()) {
-            // MX Player y Just Player aceptan subtítulos externos
-            i.putExtra("subs", s.subtitulos.map { Uri.parse(it.url) }.toTypedArray())
-            i.putExtra("subs.name", s.subtitulos.map { it.nombre }.toTypedArray())
-            i.putExtra("subs.enable", arrayOf(Uri.parse(s.subtitulos[0].url)))
-        }
-        try {
-            act.startActivity(Intent.createChooser(i, "Reproducir con..."))
-        } catch (e: ActivityNotFoundException) {
-            Toast.makeText(act, "Instala un reproductor como VLC o MX Player", Toast.LENGTH_LONG).show()
-        }
-        if (s.headers.containsKey("Referer")) {
-            Toast.makeText(
-                act, "Si no carga, usa MX Player o Just Player: VLC no envía el Referer que pide este servidor",
-                Toast.LENGTH_LONG
-            ).show()
-        }
     }
 
     // ---------- Comprobar cuáles servidores funcionan ----------

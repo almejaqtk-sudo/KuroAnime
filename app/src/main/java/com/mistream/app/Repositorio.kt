@@ -69,6 +69,9 @@ object Repositorio {
     fun buscarItem(titulo: String, portada: String): Item? =
         registro.firstOrNull { it.titulo == titulo && it.portada == portada }
 
+    fun buscarItem(titulo: String): Item? =
+        registro.firstOrNull { it.titulo.equals(titulo, ignoreCase = true) }
+
     // Títulos que llegaron después (por ejemplo, al filtrar por género): se pueden abrir igual
     fun agregarARegistro(nuevos: List<Item>) {
         registro = registro + nuevos
@@ -281,6 +284,9 @@ object Repositorio {
                     o.put("ultimo", item.ultimo)
                     o.put("id", item.id)
                     o.put("generos", JSONArray(item.generos))
+                    val rels = JSONArray()
+                    for (rel in item.relacionados) rels.put(JSONObject().put("titulo", rel.titulo).put("relacion", rel.relacion).put("portada", rel.portada).put("id", rel.id).put("fuente", rel.fuente))
+                    o.put("relacionados", rels)
                     o.put("ep", JSONArray(ModuloParser.episodiosAJson(item.episodios)))
                     lista.put(o)
                 }
@@ -312,6 +318,12 @@ object Repositorio {
                     val gs = mutableListOf<String>()
                     val ga = o.optJSONArray("generos")
                     if (ga != null) for (k in 0 until ga.length()) gs.add(ga.getString(k))
+                    val rels = mutableListOf<Relacionado>()
+                    val ra = o.optJSONArray("relacionados")
+                    if (ra != null) for (r in 0 until ra.length()) {
+                        val ro = ra.optJSONObject(r) ?: continue
+                        rels.add(Relacionado(ro.optString("titulo"), ro.optString("relacion"), ro.optString("portada"), ro.optString("id"), ro.optString("fuente")))
+                    }
                     lista.add(
                         Item(
                             titulo = o.getString("titulo"),
@@ -326,7 +338,8 @@ object Repositorio {
                             estado = o.optString("estado", ""),
                             ultimo = o.optString("ultimo", ""),
                             id = o.optString("id", ""),
-                            fuente = fuente
+                            fuente = fuente,
+                            relacionados = rels
                         )
                     )
                 }

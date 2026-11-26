@@ -28,6 +28,8 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONObject
+import org.json.JSONArray
 
 class MainActivity : Activity() {
 
@@ -38,10 +40,12 @@ class MainActivity : Activity() {
     private lateinit var buscador: EditText
     private lateinit var titulo: TextView
     private lateinit var grilla: GridView
+    private lateinit var accionesFavoritos: LinearLayout
     private lateinit var pModulo: TextView
     private val pestanas = mutableListOf<TextView>()
 
     private var pestana = 0
+    private var carpetaFavoritos: String? = null
 
     // Botón "Cargar más" del inicio: va trayendo los días anteriores (o más páginas si el módulo no tiene días)
     private lateinit var botonMas: TextView
@@ -184,6 +188,32 @@ class MainActivity : Activity() {
         titulo.setPadding(dp(2), dp(18), 0, dp(10))
         contenido.addView(titulo)
 
+        val accionesFav = LinearLayout(this)
+        accionesFav.orientation = LinearLayout.HORIZONTAL
+        accionesFav.visibility = View.GONE
+        val crearCarpeta = Ui.pildora(this, "＋ Carpeta")
+        crearCarpeta.setOnClickListener {
+            val entrada = EditText(this); entrada.hint = "Nombre de carpeta"
+            AlertDialog.Builder(this).setTitle("Nueva carpeta").setView(entrada)
+                .setPositiveButton("Crear") { _, _ ->
+                    if (Favoritos.crearCarpeta(prefs, entrada.text.toString())) {
+                        Toast.makeText(this, "Carpeta creada", Toast.LENGTH_SHORT).show()
+                        mostrarSelectorCarpeta()
+                    } else Toast.makeText(this, "Nombre vacío o carpeta existente", Toast.LENGTH_SHORT).show()
+                }.setNegativeButton("Cancelar", null).show()
+        }
+        val elegirCarpeta = Ui.pildora(this, "Carpetas ▾")
+        elegirCarpeta.setOnClickListener { mostrarSelectorCarpeta() }
+        val backup = Ui.pildora(this, "Copia seguridad")
+        backup.setOnClickListener { crearCopiaSeguridad() }
+        val restaurar = Ui.pildora(this, "Restaurar")
+        restaurar.setOnClickListener { elegirCopiaSeguridad() }
+        for (b in listOf(crearCarpeta, elegirCarpeta, backup, restaurar)) {
+            val lp = LinearLayout.LayoutParams(0, -2, 1f); lp.setMargins(dp(2), dp(4), dp(2), dp(4)); accionesFav.addView(b, lp)
+        }
+        contenido.addView(accionesFav)
+        accionesFavoritos = accionesFav
+
         // Cuadrícula
         grilla = GridView(this)
         grilla.numColumns = 3
@@ -229,7 +259,7 @@ class MainActivity : Activity() {
         barra.orientation = LinearLayout.HORIZONTAL
         barra.setBackgroundColor(Ui.BARRA)
         barra.setPadding(0, dp(8), 0, dp(10))
-        val nombres = listOf("⌂\nInicio", "🔍\nBuscar", "★\nMi lista", "⚙\nMódulos")
+        val nombres = listOf("⌂\nInicio", "🔍\nBuscar", "★\nFavoritos", "⚙\nMódulos")
         for ((i, n) in nombres.withIndex()) {
             val t = TextView(this)
             t.text = n
@@ -427,17 +457,19 @@ class MainActivity : Activity() {
                 }
             }
             else -> {
-                visibles = todos.filter { favs.contains(it.titulo) }
-                titulo.text = "Mi lista"
+                val enCarpeta = carpetaFavoritos?.let { Favoritos.titulosCarpeta(prefs, it) }
+                visibles = todos.filter { favs.contains(it.titulo) && (enCarpeta == null || it.titulo in enCarpeta) }
+                titulo.text = carpetaFavoritos?.let { "Favoritos · $it" } ?: "Favoritos"
             }
         }
         if (todos.isEmpty()) {
             titulo.text = "Sin contenido. Toca Módulos para agregar uno."
         } else if (pestana == 2 && visibles.isEmpty()) {
-            titulo.text = "Mi lista vacía. Abre un título y toca ☆ Mi lista."
+            titulo.text = "Favoritos vacíos. Abre un anime y toca ☆ Favoritos."
         }
 
         cabecera.visibility = if (pestana <= 1) View.VISIBLE else View.GONE
+        accionesFavoritos.visibility = if (pestana == 2) View.VISIBLE else View.GONE
         scrollFiltros.visibility =
             if (pestana == 0 && filtros.childCount > 0) View.VISIBLE else View.GONE
         buscador.visibility = if (pestana == 1) View.VISIBLE else View.GONE
@@ -920,6 +952,76 @@ class MainActivity : Activity() {
                 grilla.setSelection(posicion)
             }
         }.start()
+    }
+
+
+    private fun mostrarSelectorCarpeta() {
+        val carpetas = Favoritos.nombresCarpetas(prefs)
+        val opciones = listOf("Todos los favoritos") + carpetas
+        AlertDialog.Builder(this).setTitle("Carpetas de favoritos")
+            .setItems(opciones.toTypedArray()) { _, which ->
+                carpetaFavoritos = if (which == 0) null else carpetas[which - 1]
+                actualizar()
+            }.show()
+    }
+
+    private fun crearCopiaSeguridad() {
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"
+            putExtra(Intent.EXTRA_TITLE, "KuroAnime_backup.json")
+        }
+        startActivityForResult(intent, 8101)
+    }
+
+    private fun elegirCopiaSeguridad() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"
+        }
+        startActivityForResult(intent, 8102)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        try {
+            if (requestCode == 8101) {
+                val root = JSONObject()
+                val all = prefs.all
+                val values = JSONObject()
+                for ((k, v) in all) {
+                    when (v) {
+                        is Boolean, is Int, is Long, is Float, is String -> values.put(k, v)
+                        is Set<*> -> values.put(k, JSONArray(v.toList()))
+                    }
+                }
+                root.put("app", "KuroAnime"); root.put("version", 1); root.put("preferences", values)
+                contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(root.toString(2)) }
+                Toast.makeText(this, "Copia de seguridad guardada", Toast.LENGTH_LONG).show()
+            } else if (requestCode == 8102) {
+                val root = JSONObject(contentResolver.openInputStream(uri)!!.bufferedReader().use { it.readText() })
+                val values = root.getJSONObject("preferences")
+                val editor = prefs.edit().clear()
+                val keys = values.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next(); val v = values.get(k)
+                    when (v) {
+                        is Boolean -> editor.putBoolean(k, v)
+                        is Int -> editor.putInt(k, v)
+                        is Long -> editor.putLong(k, v)
+                        is Double -> editor.putFloat(k, v.toFloat())
+                        is String -> editor.putString(k, v)
+                        is JSONArray -> editor.putString(k, v.toString())
+                    }
+                }
+                editor.apply()
+                carpetaFavoritos = null
+                Toast.makeText(this, "Copia restaurada. Reinicia la app para recargar catálogo y progreso.", Toast.LENGTH_LONG).show()
+                actualizar()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "No se pudo procesar la copia: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun abrirDetalle(item: Item) {
