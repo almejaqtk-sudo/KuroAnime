@@ -557,7 +557,7 @@ async function discoverEndpoints(html, doc, pageUrl) {
 return {
   id: 'animeav1',
   name: 'AnimeAV1',
-  version: 8,
+  version: 9,
   baseUrl: BASE_URL,
 
   filters: FILTERS,
@@ -612,7 +612,18 @@ return {
   },
 
   // Episodios recién publicados (sección "Recientemente Actualizado" de la portada), en orden de salida
-  async latest() {
+  // page 1 = lo recién publicado en la portada. page 2, 3... = animes del día anterior, antepenúltimo... (según /horario)
+  async latest(page = 1) {
+    const p = Math.max(1, Number(page) || 1);
+    if (p > 1) {
+      const d = new Date();
+      d.setDate(d.getDate() - (p - 1));
+      const label = WEEK_LABEL[JS_DAYS[d.getDay()]];
+      let days = [];
+      try { days = await this.schedule(); } catch (_) { return []; }
+      const entry = days.find((x) => x.day === label);
+      return entry ? entry.items.map((it) => Object.assign({}, it, { note: label })) : [];
+    }
     const url = api.abs('/', BASE_URL);
     const html = await api.text(url);
     const doc = new DOMParser().parseFromString(html, 'text/html');

@@ -53,6 +53,7 @@
     text: async function (url, opt) { var r = await fetch(url, opt); if (!r.ok) throw httpErr(r); return r.text(); },
     json: async function (url, opt) { var r = await fetch(url, opt); if (!r.ok) throw httpErr(r); return r.json(); },
     html: async function (url, opt) { return new DOMParser().parseFromString(await api.text(url, opt), 'text/html'); },
+    log: function (m) { try { KuroBridge.log(String(m)); } catch (e) {} },
     abs: function (rel, base) { try { return new URL(rel, base).href; } catch (e) { return rel; } }
   };
 
