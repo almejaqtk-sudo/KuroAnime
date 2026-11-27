@@ -426,26 +426,31 @@ class DetalleActivity : Activity() {
     }
 
     private fun abrirRelacionado(rel: Relacionado) {
-        val local = Repositorio.buscarItem(rel.titulo, rel.portada) ?: Repositorio.buscarItem(rel.titulo)
+        // Cada ficha conserva la fuente exacta del módulo que la proporcionó.
+        // AniList aporta los títulos/portadas relacionados, pero nunca decide el módulo destino.
+        val fuenteModulo = fuenteItem.ifBlank {
+            Repositorio.buscarItem(titulo, portada)?.fuente.orEmpty()
+        }
+        val local = Repositorio.buscarItemEnFuente(rel.titulo, rel.portada, fuenteModulo)
         if (local != null) {
             abrirDetalleRelacionado(local)
             return
         }
+        if (fuenteModulo.isBlank()) {
+            Toast.makeText(this, "No se pudo identificar el módulo de este anime.", Toast.LENGTH_LONG).show()
+            return
+        }
 
-        Toast.makeText(this, "Buscando ${rel.titulo} en los módulos instalados…", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Buscando ${rel.titulo} en este módulo…", Toast.LENGTH_SHORT).show()
         Thread {
-            val encontrado = try {
-                Repositorio.buscarEnTodos(prefs, rel.titulo, fuenteItem)
-            } catch (_: Exception) {
-                null
-            }
+            val encontrado = Repositorio.buscarEnModulo(fuenteModulo, rel.titulo)
             runOnUiThread {
                 if (encontrado != null && !isFinishing && !isDestroyed) {
                     abrirDetalleRelacionado(encontrado)
                 } else if (!isFinishing && !isDestroyed) {
                     Toast.makeText(
                         this,
-                        "No se encontró «${rel.titulo}» en los módulos instalados y activos.",
+                        "No se encontró «${rel.titulo}» en el catálogo de este módulo.",
                         Toast.LENGTH_LONG
                     ).show()
                 }

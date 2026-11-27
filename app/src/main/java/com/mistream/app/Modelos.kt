@@ -159,15 +159,15 @@ object ModuloParser {
         )
     }
 
-    fun parse(texto: String): Modulo {
+    fun parse(texto: String, fuente: String = ""): Modulo {
         val raiz = JSONObject(texto)
         val nombreModulo = raiz.optString("nombre", "Módulo")
         val items = mutableListOf<Item>()
         val arrItems = raiz.getJSONArray("items")
         for (i in 0 until arrItems.length()) {
-            items.add(itemDeObjeto(arrItems.getJSONObject(i), nombreModulo))
+            items.add(itemDeObjeto(arrItems.getJSONObject(i), nombreModulo, fuente))
         }
-        return Modulo(nombreModulo, items)
+        return Modulo(nombreModulo, items, fuente)
     }
 
     fun episodiosAJson(lista: List<Episodio>): String {

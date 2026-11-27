@@ -72,9 +72,77 @@ object Repositorio {
     fun buscarItem(titulo: String): Item? =
         registro.firstOrNull { it.titulo.equals(titulo, ignoreCase = true) }
 
+    // Busca dentro del registro únicamente del módulo que originó la ficha actual.
+    fun buscarItemEnFuente(titulo: String, portada: String = "", fuente: String): Item? {
+        if (fuente.isBlank()) return null
+        val candidatos = registro.filter { it.fuente == fuente }
+        return candidatos.firstOrNull {
+            it.titulo.equals(titulo, ignoreCase = true) &&
+                (portada.isBlank() || it.portada == portada)
+        } ?: candidatos.firstOrNull { it.titulo.equals(titulo, ignoreCase = true) }
+    }
+
     // Títulos que llegaron después (por ejemplo, al filtrar por género): se pueden abrir igual
     fun agregarARegistro(nuevos: List<Item>) {
         registro = registro + nuevos
+    }
+
+    /**
+     * Busca un título relacionado exclusivamente en el módulo que originó la ficha actual.
+     * `fuenteActual` es el código JS/Hub o la URL del módulo individual, no un índice global.
+     * Debe llamarse desde un hilo secundario porque puede realizar peticiones de red.
+     */
+    fun buscarEnModulo(
+        fuenteActual: String,
+        consulta: String
+    ): Item? {
+        val fuente = fuenteActual.trim()
+        val objetivo = normalizarTitulo(consulta)
+        if (fuente.isBlank() || objetivo.isBlank()) return null
+
+        buscarItemEnFuente(consulta, fuente = fuente)?.let { return it }
+
+        return try {
+            val texto = if (fuente.startsWith("http", true)) {
+                val conexion = URL(fuente).openConnection() as java.net.HttpURLConnection
+                conexion.connectTimeout = 12000
+                conexion.readTimeout = 15000
+                conexion.instanceFollowRedirects = true
+                conexion.setRequestProperty("User-Agent", "AniKai/1.0")
+                try {
+                    if (conexion.responseCode !in 200..299) return null
+                    conexion.inputStream.bufferedReader().use { it.readText() }
+                } finally {
+                    conexion.disconnect()
+                }
+            } else fuente
+
+            val limpio = texto.trim()
+            val encontrados = if (limpio.startsWith("{")) {
+                val raiz = JSONObject(limpio)
+                // Un índice contiene varios módulos: no se expande para evitar una búsqueda global.
+                if (raiz.has("modulos")) return null
+                if (raiz.has("items")) {
+                    ModuloParser.parse(limpio, fuente).items.filter {
+                        coincideTitulo(it.titulo, consulta)
+                    }
+                } else emptyList()
+            } else {
+                Motores.buscar(limpio, consulta).map { item ->
+                    if (item.fuente.isBlank()) item.copy(fuente = fuente) else item
+                }
+            }
+
+            val exacto = encontrados.firstOrNull { normalizarTitulo(it.titulo) == objetivo }
+            val resultado = exacto ?: encontrados.firstOrNull {
+                val t = normalizarTitulo(it.titulo)
+                t.length >= 4 && (t.contains(objetivo) || objetivo.contains(t))
+            }
+            if (resultado != null) agregarARegistro(listOf(resultado))
+            resultado
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /**
@@ -501,7 +569,7 @@ object Repositorio {
                         }
                     }
                 } else {
-                    modulos.add(ModuloParser.parse(texto))
+                    modulos.add(ModuloParser.parse(texto, fuente))
                 }
             } else {
                 modulos.add(Motores.cargar(texto))
