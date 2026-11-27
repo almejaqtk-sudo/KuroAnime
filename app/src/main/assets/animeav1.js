@@ -158,47 +158,58 @@ function imgUrl(img, baseUrl) {
 }
 
 function parseCardList(doc, baseUrl) {
-  // AnimeAV1 usa /media/<slug> para las fichas (no /anime/).
-  // Tomamos enlaces directos a fichas y usamos su tarjeta contenedora
-  // para recuperar portada y título sin confundirlos con enlaces de episodios.
-  const links = Array.from(doc.querySelectorAll('a[href*="/media/"]'));
+  const cardSelectors = [
+    'article',
+    '.anime-card',
+    // AnimeAV1 usa /media/ para las fichas del catálogo (no /anime/).
+    '.grid a[href*="/media/"]',
+    'a[href*="/media/"]',
+    // Compatibilidad con versiones antiguas del sitio.
+    '.grid a[href*="/anime/"]',
+    'a[href*="/anime/"]'
+  ];
+
+  let cards = [];
+  for (const sel of cardSelectors) {
+    const found = Array.from(doc.querySelectorAll(sel));
+    if (found.length > 0) {
+      cards = found;
+      break;
+    }
+  }
+
   const seen = new Set();
   const items = [];
 
-  for (const link of links) {
-    const href = (link.getAttribute('href') || '').trim();
+  for (const card of cards) {
+    const link = card.matches('a')
+      ? card
+      : card.querySelector('a[href*="/media/"]') ||
+        card.querySelector('a[href*="/anime/"]') ||
+        card.querySelector('a');
+    const href = link ? link.getAttribute('href') || '' : '';
     if (!href || href === '#' || href.startsWith('javascript:')) continue;
 
-    let absUrl;
-    try {
-      absUrl = api.abs(href, baseUrl);
-      const parsed = new URL(absUrl);
-      // Solo fichas /media/slug; descarta /media/slug/episodio.
-      if (!/^\/media\/[^/]+\/?$/.test(parsed.pathname)) continue;
-    } catch (_) {
-      continue;
-    }
-
+    const absUrl = api.abs(href, baseUrl);
     if (seen.has(absUrl)) continue;
     seen.add(absUrl);
 
-    const card = link.closest('.anime-card, article, li, .card, .item, .anime-item') || link;
-    const img = card.querySelector('img') || link.querySelector('img');
+    const img = card.querySelector('img');
     const cover = imgUrl(img, baseUrl);
 
     const title = (
       card.querySelector('h2, h3, h4, .title, .anime-title')?.textContent ||
       img?.getAttribute('alt') ||
-      link.getAttribute('title') ||
-      link.textContent ||
+      link?.getAttribute('title') ||
+      link?.textContent ||
       ''
-    ).replace(/\s+/g, ' ').trim();
+    ).trim();
 
     if (!title) continue;
 
     const sub = (
       card.querySelector('.type, .badge, .meta, .sub, span')?.textContent || ''
-    ).replace(/\s+/g, ' ').trim();
+    ).trim();
 
     items.push({
       title,
