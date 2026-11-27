@@ -6,7 +6,7 @@
     <application
         android:name=".KuroApp"
         android:icon="@drawable/ic_kuro"
-        android:label="KuroAnime"
+        android:label="AniKai"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
