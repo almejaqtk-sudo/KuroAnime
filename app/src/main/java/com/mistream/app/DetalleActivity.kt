@@ -57,8 +57,6 @@ class DetalleActivity : Activity() {
     private var episodiosJson = "[]"
     private var idItem = ""
     private var fuenteItem = ""
-    private var moduloItem = ""
-    private var claveFavorito = ""
     private var busquedaServidores = 0
     private var episodios: List<Episodio> = emptyList()
     private var indiceAccion = 0
@@ -96,8 +94,6 @@ class DetalleActivity : Activity() {
         episodiosJson = intent.getStringExtra("episodios") ?: "[]"
         idItem = intent.getStringExtra("id") ?: ""
         fuenteItem = intent.getStringExtra("fuente") ?: ""
-        moduloItem = intent.getStringExtra("modulo") ?: ""
-        claveFavorito = Favoritos.clave(fuenteItem, idItem, moduloItem, titulo, portada)
         episodios = ModuloParser.episodiosDeJson(episodiosJson)
         descendente = prefs.getBoolean("eps_desc", true)
 
@@ -264,8 +260,7 @@ class DetalleActivity : Activity() {
         botonLista.setPadding(dp(20), 0, dp(20), 0)
         botonLista.background = Ui.fondo(this, Ui.FONDO, 27, Ui.BORDE)
         botonLista.setOnClickListener {
-            Favoritos.guardarDatos(prefs, claveFavorito, titulo, portada, descripcionActual, metaActual, idItem, fuenteItem, moduloItem, episodiosJson)
-            val ahora = Favoritos.alternar(prefs, claveFavorito, titulo)
+            val ahora = Favoritos.alternar(prefs, titulo)
             actualizarFav()
             if (ahora) mostrarDialogoCarpetasFavorito()
             Toast.makeText(this, if (ahora) "Agregado a Favoritos" else "Quitado de Favoritos", Toast.LENGTH_SHORT).show()
@@ -431,16 +426,24 @@ class DetalleActivity : Activity() {
     }
 
     private fun abrirRelacionado(rel: Relacionado) {
-        val local = Repositorio.buscarItem(rel.titulo, rel.portada) ?: Repositorio.buscarItem(rel.titulo)
+        val fuenteObjetivo = rel.fuente.ifBlank { fuenteItem }
+        val titulos = (listOf(rel.titulo) + rel.titulosAlternativos).filter { it.isNotBlank() }
+            .distinctBy { it.trim().lowercase() }
+
+        // Solo reutilizar elementos que pertenezcan al mismo módulo de la ficha actual.
+        val local = titulos.asSequence().mapNotNull { nombre ->
+            Repositorio.buscarItem(nombre, rel.portada)?.takeIf { it.fuente == fuenteObjetivo }
+                ?: Repositorio.buscarItem(nombre)?.takeIf { it.fuente == fuenteObjetivo }
+        }.firstOrNull()
         if (local != null) {
             abrirDetalleRelacionado(local)
             return
         }
 
-        Toast.makeText(this, "Buscando ${rel.titulo} en los módulos instalados…", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Buscando en el módulo actual…", Toast.LENGTH_SHORT).show()
         Thread {
             val encontrado = try {
-                Repositorio.buscarEnTodos(prefs, rel.titulo, fuenteItem)
+                Repositorio.buscarEnModulo(fuenteObjetivo, titulos)
             } catch (_: Exception) {
                 null
             }
@@ -450,7 +453,7 @@ class DetalleActivity : Activity() {
                 } else if (!isFinishing && !isDestroyed) {
                     Toast.makeText(
                         this,
-                        "No se encontró «${rel.titulo}» en los módulos instalados y activos.",
+                        "No se encontró «${rel.titulo}» en el catálogo de este módulo. Prueba con otro título relacionado.",
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -544,9 +547,12 @@ class DetalleActivity : Activity() {
                 val node = edge.optJSONObject("node") ?: continue
                 if (node.optString("type") != "ANIME" || node.optInt("id", -1) == mediaId) continue
                 val titles = node.optJSONObject("title")
-                val title = titles?.optString("english").orEmpty()
-                    .ifBlank { titles?.optString("romaji").orEmpty() }
-                    .ifBlank { titles?.optString("native").orEmpty() }
+                val alternativos = listOf(
+                    titles?.optString("english").orEmpty(),
+                    titles?.optString("romaji").orEmpty(),
+                    titles?.optString("native").orEmpty()
+                ).map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
+                val title = alternativos.firstOrNull().orEmpty()
                 if (title.isBlank()) continue
                 val relation = etiquetas[edge.optString("relationType")] ?: "Relacionado"
                 val format = node.optString("format")
@@ -558,7 +564,7 @@ class DetalleActivity : Activity() {
                     else -> relation
                 }
                 val cover = node.optJSONObject("coverImage")?.optString("medium").orEmpty()
-                salida.add(Relacionado(title, label, cover, "", ""))
+                salida.add(Relacionado(title, label, cover, "", "", alternativos.drop(1)))
             }
             return salida
         } finally {
@@ -599,8 +605,7 @@ class DetalleActivity : Activity() {
             .setView(contenedor).setNegativeButton("Cerrar", null).create()
         agregar.setOnClickListener {
             val nombre = entrada.text.toString().trim()
-            Favoritos.guardarDatos(prefs, claveFavorito, titulo, portada, descripcionActual, metaActual, idItem, fuenteItem, moduloItem, episodiosJson)
-            if (Favoritos.crearCarpetaConAnime(prefs, nombre, claveFavorito)) {
+            if (Favoritos.crearCarpetaConAnime(prefs, nombre, titulo)) {
                 actualizarFav()
                 Toast.makeText(this, "Carpeta creada y anime agregado automáticamente", Toast.LENGTH_SHORT).show()
                 dialogo.dismiss()
@@ -609,8 +614,7 @@ class DetalleActivity : Activity() {
         radios.setOnCheckedChangeListener { group, checkedId ->
             val radio = group.findViewById<RadioButton>(checkedId)
             if (radio != null) {
-                Favoritos.guardarDatos(prefs, claveFavorito, titulo, portada, descripcionActual, metaActual, idItem, fuenteItem, moduloItem, episodiosJson)
-                Favoritos.agregarACarpeta(prefs, radio.tag.toString(), claveFavorito)
+                Favoritos.agregarACarpeta(prefs, radio.tag.toString(), titulo)
                 Toast.makeText(this, "Agregado a ${radio.tag}", Toast.LENGTH_SHORT).show()
                 dialogo.dismiss()
             }
@@ -620,7 +624,7 @@ class DetalleActivity : Activity() {
 
     private fun actualizarFav() {
         if (!::botonLista.isInitialized) return
-        val fav = Favoritos.esFavorito(prefs, claveFavorito, titulo)
+        val fav = Favoritos.esFavorito(prefs, titulo)
         botonLista.text = if (fav) "★ En favoritos" else "☆ Favoritos"
         botonLista.setTextColor(if (fav) Ui.ROSA else Color.WHITE)
     }
@@ -688,9 +692,6 @@ class DetalleActivity : Activity() {
                 runOnUiThread {
                     episodios = eps
                     episodiosJson = ModuloParser.episodiosAJson(eps)
-                    if (Favoritos.esFavorito(prefs, claveFavorito, titulo)) {
-                        Favoritos.guardarDatos(prefs, claveFavorito, titulo, portada, descripcionActual, metaActual, idItem, fuenteItem, moduloItem, episodiosJson)
-                    }
                     tvEps.text = if (eps.isEmpty()) "Sin episodios" else "Episodios"
                     if (extra != null) {
                         if (extra.first.isNotEmpty()) descripcionActual = extra.first

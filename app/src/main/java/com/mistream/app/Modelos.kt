@@ -21,15 +21,7 @@ data class ServerLink(
 
 data class Episodio(val titulo: String, val servidores: List<ServerLink>)
 
-data class Relacionado(
-    val titulo: String,
-    val relacion: String = "",
-    val portada: String = "",
-    val id: String = "",
-    val fuente: String = "",
-    // Otros nombres oficiales/alternativos devueltos por AniList para localizarlo en el catálogo del módulo.
-    val alternativas: List<String> = emptyList()
-)
+data class Relacionado(val titulo: String, val relacion: String = "", val portada: String = "", val id: String = "", val fuente: String = "", val titulosAlternativos: List<String> = emptyList())
 
 data class Item(
     val titulo: String,
@@ -149,7 +141,7 @@ object ModuloParser {
                 ro.optString("portada", ""),
                 ro.optString("id", ""),
                 ro.optString("fuente", ""),
-                (ro.optJSONArray("alternativas")?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() } } ?: emptyList())
+                (ro.optJSONArray("titulosAlternativos")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList())
             ))
         }
         return Item(
@@ -168,15 +160,15 @@ object ModuloParser {
         )
     }
 
-    fun parse(texto: String, fuente: String = ""): Modulo {
+    fun parse(texto: String): Modulo {
         val raiz = JSONObject(texto)
         val nombreModulo = raiz.optString("nombre", "Módulo")
         val items = mutableListOf<Item>()
         val arrItems = raiz.getJSONArray("items")
         for (i in 0 until arrItems.length()) {
-            items.add(itemDeObjeto(arrItems.getJSONObject(i), nombreModulo, fuente))
+            items.add(itemDeObjeto(arrItems.getJSONObject(i), nombreModulo))
         }
-        return Modulo(nombreModulo, items, fuente)
+        return Modulo(nombreModulo, items)
     }
 
     fun episodiosAJson(lista: List<Episodio>): String {

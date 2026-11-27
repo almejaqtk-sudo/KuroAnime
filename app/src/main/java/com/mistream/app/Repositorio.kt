@@ -72,95 +72,79 @@ object Repositorio {
     fun buscarItem(titulo: String): Item? =
         registro.firstOrNull { it.titulo.equals(titulo, ignoreCase = true) }
 
-    // Busca dentro del registro únicamente del módulo que originó la ficha actual.
-    fun buscarItemEnFuente(titulo: String, portada: String = "", fuente: String): Item? {
-        if (fuente.isBlank()) return null
-        val candidatos = registro.filter { it.fuente == fuente }
-        return candidatos.firstOrNull {
-            it.titulo.equals(titulo, ignoreCase = true) &&
-                (portada.isBlank() || it.portada == portada)
-        } ?: candidatos.firstOrNull { it.titulo.equals(titulo, ignoreCase = true) }
+    /** Busca un anime exclusivamente en el módulo que originó la ficha actual. */
+    fun buscarEnModulo(fuenteActual: String, consultas: List<String>): Item? {
+        if (fuenteActual.isBlank()) return null
+        val nombres = consultas.map { it.trim() }.filter { it.isNotBlank() }.distinctBy { normalizarTitulo(it) }
+        if (nombres.isEmpty()) return null
+
+        val claveFuente = fuenteActual.trim()
+        for (consulta in nombres) {
+            val objetivo = normalizarTitulo(consulta)
+            registro.firstOrNull {
+                it.fuente.trim() == claveFuente && normalizarTitulo(it.titulo) == objetivo
+            }?.let { return it }
+        }
+
+        val resultados = mutableListOf<Item>()
+        for (consulta in nombres) {
+            try {
+                val encontrados = buscarUnaFuente(claveFuente, consulta)
+                resultados.addAll(encontrados)
+                val objetivo = normalizarTitulo(consulta)
+                resultados.firstOrNull { normalizarTitulo(it.titulo) == objetivo }?.let {
+                    agregarARegistro(listOf(it))
+                    return it
+                }
+            } catch (_: Exception) {
+                // Un fallo de búsqueda en este módulo no debe bloquear los otros alias.
+            }
+        }
+
+        // Aceptar una coincidencia parcial solo si comparte una parte significativa del título.
+        val objetivos = nombres.map { normalizarTitulo(it) }.filter { it.length >= 5 }
+        val parcial = resultados.distinctBy { normalizarTitulo(it.titulo) + "|" + it.fuente }
+            .firstOrNull { item ->
+                val titulo = normalizarTitulo(item.titulo)
+                objetivos.any { objetivo ->
+                    titulo == objetivo ||
+                        (titulo.length >= 6 && objetivo.length >= 6 &&
+                            (titulo.contains(objetivo) || objetivo.contains(titulo)))
+                }
+            }
+        if (parcial != null) agregarARegistro(listOf(parcial))
+        return parcial
+    }
+
+    private fun buscarUnaFuente(fuente: String, consulta: String): List<Item> {
+        val texto = if (fuente.trimStart().startsWith("http", true)) {
+            val conexion = URL(fuente.trim()).openConnection() as java.net.HttpURLConnection
+            conexion.connectTimeout = 12000
+            conexion.readTimeout = 15000
+            conexion.instanceFollowRedirects = true
+            conexion.setRequestProperty("User-Agent", "AniKai/1.0")
+            try {
+                if (conexion.responseCode !in 200..299) return emptyList()
+                conexion.inputStream.bufferedReader().use { it.readText() }
+            } finally {
+                conexion.disconnect()
+            }
+        } else fuente
+
+        val limpio = texto.trim()
+        if (limpio.startsWith("{")) {
+            val raiz = JSONObject(limpio)
+            if (raiz.has("items")) {
+                val modulo = ModuloParser.parse(limpio)
+                return modulo.items.filter { coincideTitulo(it.titulo, consulta) }
+            }
+        }
+        return Motores.buscar(limpio, consulta)
     }
 
     // Títulos que llegaron después (por ejemplo, al filtrar por género): se pueden abrir igual
     fun agregarARegistro(nuevos: List<Item>) {
         registro = registro + nuevos
-    }
-
-    /**
-     * Busca un título relacionado exclusivamente en el módulo que originó la ficha actual.
-     * `fuenteActual` es el código JS/Hub o la URL del módulo individual, no un índice global.
-     * Debe llamarse desde un hilo secundario porque puede realizar peticiones de red.
-     */
-    fun buscarEnModulo(
-        fuenteActual: String,
-        consulta: String,
-        alternativas: List<String> = emptyList()
-    ): Item? {
-        val fuente = fuenteActual.trim()
-        val consultas = (listOf(consulta) + alternativas).map { it.trim() }
-            .filter { it.isNotBlank() }
-            .distinctBy { normalizarTitulo(it) }
-        if (fuente.isBlank() || consultas.isEmpty()) return null
-
-        // Primero se revisan los elementos que ya están cargados, pero solo de esta fuente.
-        for (q in consultas) buscarItemEnFuente(q, fuente = fuente)?.let { return it }
-
-        return try {
-            val texto = if (fuente.startsWith("http", true)) {
-                val conexion = URL(fuente).openConnection() as java.net.HttpURLConnection
-                conexion.connectTimeout = 12000
-                conexion.readTimeout = 15000
-                conexion.instanceFollowRedirects = true
-                conexion.setRequestProperty("User-Agent", "AniKai/1.0")
-                try {
-                    if (conexion.responseCode !in 200..299) return null
-                    conexion.inputStream.bufferedReader().use { it.readText() }
-                } finally {
-                    conexion.disconnect()
-                }
-            } else fuente
-
-            val limpio = texto.trim()
-            val encontrados = if (limpio.startsWith("{")) {
-                val raiz = JSONObject(limpio)
-                // Un índice contiene varios módulos: no se expande para evitar una búsqueda global.
-                if (raiz.has("modulos")) return null
-                if (raiz.has("items")) {
-                    val catalogo = ModuloParser.parse(limpio, fuente).items
-                    catalogo.filter { item -> consultas.any { coincideTitulo(item.titulo, it) } }
-                } else emptyList()
-            } else {
-                // Cada consulta se ejecuta contra el mismo módulo; nunca se recorren otros módulos.
-                val salida = mutableListOf<Item>()
-                for (q in consultas) {
-                    val resultados = Motores.buscar(limpio, q).map { item ->
-                        if (item.fuente.isBlank()) item.copy(fuente = fuente) else item
-                    }
-                    salida.addAll(resultados)
-                    val exacto = salida.firstOrNull { item ->
-                        consultas.any { normalizarTitulo(item.titulo) == normalizarTitulo(it) }
-                    }
-                    if (exacto != null) break
-                }
-                salida
-            }
-
-            val exacto = encontrados.firstOrNull { item ->
-                consultas.any { normalizarTitulo(item.titulo) == normalizarTitulo(it) }
-            }
-            val resultado = exacto ?: encontrados.firstOrNull { item ->
-                val t = normalizarTitulo(item.titulo)
-                t.length >= 4 && consultas.any { q ->
-                    val n = normalizarTitulo(q)
-                    n.length >= 4 && (t.contains(n) || n.contains(t))
-                }
-            }
-            if (resultado != null) agregarARegistro(listOf(resultado))
-            resultado
-        } catch (_: Exception) {
-            null
-        }
     }
 
     /**
@@ -481,7 +465,11 @@ object Repositorio {
                     o.put("id", item.id)
                     o.put("generos", JSONArray(item.generos))
                     val rels = JSONArray()
-                    for (rel in item.relacionados) rels.put(JSONObject().put("titulo", rel.titulo).put("relacion", rel.relacion).put("portada", rel.portada).put("id", rel.id).put("fuente", rel.fuente).put("alternativas", JSONArray(rel.alternativas)))
+                    for (rel in item.relacionados) {
+                        val aliases = JSONArray()
+                        rel.titulosAlternativos.forEach { aliases.put(it) }
+                        rels.put(JSONObject().put("titulo", rel.titulo).put("relacion", rel.relacion).put("portada", rel.portada).put("id", rel.id).put("fuente", rel.fuente).put("titulosAlternativos", aliases))
+                    }
                     o.put("relacionados", rels)
                     o.put("ep", JSONArray(ModuloParser.episodiosAJson(item.episodios)))
                     lista.put(o)
@@ -518,7 +506,7 @@ object Repositorio {
                     val ra = o.optJSONArray("relacionados")
                     if (ra != null) for (r in 0 until ra.length()) {
                         val ro = ra.optJSONObject(r) ?: continue
-                        rels.add(Relacionado(ro.optString("titulo"), ro.optString("relacion"), ro.optString("portada"), ro.optString("id"), ro.optString("fuente"), (ro.optJSONArray("alternativas")?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() } } ?: emptyList())))
+                        rels.add(Relacionado(ro.optString("titulo"), ro.optString("relacion"), ro.optString("portada"), ro.optString("id"), ro.optString("fuente"), (ro.optJSONArray("titulosAlternativos")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList())))
                     }
                     lista.add(
                         Item(
@@ -587,7 +575,7 @@ object Repositorio {
                         }
                     }
                 } else {
-                    modulos.add(ModuloParser.parse(texto, fuente))
+                    modulos.add(ModuloParser.parse(texto))
                 }
             } else {
                 modulos.add(Motores.cargar(texto))
