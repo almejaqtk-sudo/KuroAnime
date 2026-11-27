@@ -431,23 +431,23 @@ class DetalleActivity : Activity() {
             abrirDetalleRelacionado(local)
             return
         }
-        if (fuenteItem.isBlank()) {
-            Toast.makeText(this, "Busca «${rel.titulo}» en el catálogo para abrirlo.", Toast.LENGTH_LONG).show()
-            return
-        }
-        Toast.makeText(this, "Buscando ${rel.titulo}…", Toast.LENGTH_SHORT).show()
+
+        Toast.makeText(this, "Buscando ${rel.titulo} en los módulos instalados…", Toast.LENGTH_SHORT).show()
         Thread {
             val encontrado = try {
-                val resultados = Motores.buscar(fuenteItem, rel.titulo)
-                resultados.firstOrNull { it.titulo.equals(rel.titulo, ignoreCase = true) }
-                    ?: resultados.firstOrNull()
-            } catch (_: Exception) { null }
+                Repositorio.buscarEnTodos(prefs, rel.titulo, fuenteItem)
+            } catch (_: Exception) {
+                null
+            }
             runOnUiThread {
-                if (encontrado != null && !isFinishing) {
-                    Repositorio.agregarARegistro(listOf(encontrado))
+                if (encontrado != null && !isFinishing && !isDestroyed) {
                     abrirDetalleRelacionado(encontrado)
-                } else {
-                    Toast.makeText(this, "No se encontró en el módulo actual. Prueba desde Buscar.", Toast.LENGTH_LONG).show()
+                } else if (!isFinishing && !isDestroyed) {
+                    Toast.makeText(
+                        this,
+                        "No se encontró «${rel.titulo}» en los módulos instalados y activos.",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             }
         }.start()

@@ -77,6 +77,116 @@ object Repositorio {
         registro = registro + nuevos
     }
 
+    /**
+     * Busca un título relacionado en TODOS los módulos instalados y activos.
+     * Acepta módulos KuroAnime (Rhino), AnimeHub (WebView), catálogos JSON
+     * e índices JSON que contienen varias fuentes.
+     * Debe llamarse desde un hilo secundario porque puede realizar peticiones de red.
+     */
+    fun buscarEnTodos(
+        prefs: SharedPreferences,
+        consulta: String,
+        fuenteActual: String = ""
+    ): Item? {
+        val objetivo = normalizarTitulo(consulta)
+        if (objetivo.isBlank()) return null
+
+        // Primero aprovechamos los elementos ya cargados en memoria.
+        registro.firstOrNull { normalizarTitulo(it.titulo) == objetivo }?.let { return it }
+
+        val fuentes = leerInstalados(prefs)
+            .filter { it.activo }
+            .map { it.valor }
+            .toMutableList()
+        // Incluye la fuente de la ficha aunque el usuario la haya desactivado mientras estaba abierta.
+        if (fuenteActual.isNotBlank() && fuenteActual !in fuentes) fuentes.add(0, fuenteActual)
+
+        val encontrados = mutableListOf<Item>()
+        val visitadas = HashSet<String>()
+        for (fuente in fuentes) {
+            try {
+                buscarEnFuente(fuente, consulta, encontrados, visitadas, 0)
+                val exacto = encontrados.firstOrNull { normalizarTitulo(it.titulo) == objetivo }
+                if (exacto != null) {
+                    agregarARegistro(listOf(exacto))
+                    return exacto
+                }
+            } catch (_: Exception) {
+                // Un módulo que falle no debe impedir buscar en los demás.
+            }
+        }
+
+        // Solo aceptamos coincidencias parciales claras; nunca abrimos el primer resultado al azar.
+        val parcial = encontrados
+            .distinctBy { normalizarTitulo(it.titulo) + "|" + it.fuente }
+            .firstOrNull {
+                val t = normalizarTitulo(it.titulo)
+                t.length >= 4 && (t.contains(objetivo) || objetivo.contains(t))
+            }
+        if (parcial != null) agregarARegistro(listOf(parcial))
+        return parcial
+    }
+
+    private fun buscarEnFuente(
+        fuenteOriginal: String,
+        consulta: String,
+        salida: MutableList<Item>,
+        visitadas: MutableSet<String>,
+        profundidad: Int
+    ) {
+        if (profundidad > 3 || fuenteOriginal.isBlank()) return
+        val clave = fuenteOriginal.hashCode().toString()
+        if (!visitadas.add(clave)) return
+
+        val texto = if (fuenteOriginal.trimStart().startsWith("http", true)) {
+            val conexion = URL(fuenteOriginal.trim()).openConnection() as java.net.HttpURLConnection
+            conexion.connectTimeout = 12000
+            conexion.readTimeout = 15000
+            conexion.instanceFollowRedirects = true
+            conexion.setRequestProperty("User-Agent", "KuroAnime/1.0")
+            try {
+                if (conexion.responseCode !in 200..299) return
+                conexion.inputStream.bufferedReader().use { it.readText() }
+            } finally {
+                conexion.disconnect()
+            }
+        } else fuenteOriginal
+
+        val limpio = texto.trim()
+        if (limpio.startsWith("{")) {
+            val raiz = JSONObject(limpio)
+            val indice = raiz.optJSONArray("modulos")
+            if (indice != null) {
+                for (i in 0 until indice.length()) {
+                    buscarEnFuente(indice.optString(i), consulta, salida, visitadas, profundidad + 1)
+                }
+                return
+            }
+            // Los módulos JSON contienen un catálogo estático: se filtra por título.
+            if (raiz.has("items")) {
+                val modulo = ModuloParser.parse(limpio)
+                salida.addAll(modulo.items.filter { coincideTitulo(it.titulo, consulta) })
+                return
+            }
+        }
+
+        // Motores.buscar detecta automáticamente si el módulo usa Rhino o AnimeHub/WebView.
+        salida.addAll(Motores.buscar(limpio, consulta))
+    }
+
+    private fun coincideTitulo(titulo: String, consulta: String): Boolean {
+        val a = normalizarTitulo(titulo)
+        val b = normalizarTitulo(consulta)
+        return a == b || (a.length >= 4 && (a.contains(b) || b.contains(a)))
+    }
+
+    private fun normalizarTitulo(valor: String): String =
+        java.text.Normalizer.normalize(valor.lowercase(), java.text.Normalizer.Form.NFD)
+            .replace(Regex("\\p{Mn}+"), "")
+            .replace(Regex("[^a-z0-9]+"), " ")
+            .trim()
+            .replace(Regex("\\s+"), " ")
+
     // ---- Módulo AnimeAV1 integrado en la app ----
     private const val VERSION_INTEGRADO = 5
     private const val MARCA_INTEGRADO = "// AnimeAV1 (módulo integrado en KuroAnime)"
