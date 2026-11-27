@@ -57,6 +57,7 @@ class DetalleActivity : Activity() {
     private var episodiosJson = "[]"
     private var idItem = ""
     private var fuenteItem = ""
+    private var moduloItem = ""
     private var busquedaServidores = 0
     private var episodios: List<Episodio> = emptyList()
     private var indiceAccion = 0
@@ -94,6 +95,7 @@ class DetalleActivity : Activity() {
         episodiosJson = intent.getStringExtra("episodios") ?: "[]"
         idItem = intent.getStringExtra("id") ?: ""
         fuenteItem = intent.getStringExtra("fuente") ?: ""
+        moduloItem = intent.getStringExtra("modulo") ?: ""
         episodios = ModuloParser.episodiosDeJson(episodiosJson)
         descendente = prefs.getBoolean("eps_desc", true)
 
@@ -260,7 +262,8 @@ class DetalleActivity : Activity() {
         botonLista.setPadding(dp(20), 0, dp(20), 0)
         botonLista.background = Ui.fondo(this, Ui.FONDO, 27, Ui.BORDE)
         botonLista.setOnClickListener {
-            val ahora = Favoritos.alternar(prefs, titulo)
+            guardarDatosFavorito()
+            val ahora = Favoritos.alternar(prefs, claveFavorito, titulo)
             actualizarFav()
             if (ahora) mostrarDialogoCarpetasFavorito()
             Toast.makeText(this, if (ahora) "Agregado a Favoritos" else "Quitado de Favoritos", Toast.LENGTH_SHORT).show()
@@ -578,6 +581,25 @@ class DetalleActivity : Activity() {
         tvDesc.text = if (descripcionActual.isEmpty()) "Sin descripción" else descripcionActual
     }
 
+    // La identidad del anime incluye el módulo para no mezclar títulos iguales de distintas fuentes.
+    private val claveFavorito: String
+        get() = Favoritos.clave(fuenteItem, idItem, moduloItem, titulo, portada)
+
+    private fun guardarDatosFavorito() {
+        Favoritos.guardarDatos(
+            prefs = prefs,
+            clave = claveFavorito,
+            titulo = titulo,
+            portada = portada,
+            descripcion = descripcionActual,
+            meta = metaActual,
+            id = idItem,
+            fuente = fuenteItem,
+            modulo = moduloItem,
+            episodios = episodiosJson
+        )
+    }
+
     private fun mostrarDialogoCarpetasFavorito() {
         val contenedor = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -605,7 +627,8 @@ class DetalleActivity : Activity() {
             .setView(contenedor).setNegativeButton("Cerrar", null).create()
         agregar.setOnClickListener {
             val nombre = entrada.text.toString().trim()
-            if (Favoritos.crearCarpetaConAnime(prefs, nombre, titulo)) {
+            guardarDatosFavorito()
+            if (Favoritos.crearCarpetaConAnime(prefs, nombre, claveFavorito)) {
                 actualizarFav()
                 Toast.makeText(this, "Carpeta creada y anime agregado automáticamente", Toast.LENGTH_SHORT).show()
                 dialogo.dismiss()
@@ -614,7 +637,8 @@ class DetalleActivity : Activity() {
         radios.setOnCheckedChangeListener { group, checkedId ->
             val radio = group.findViewById<RadioButton>(checkedId)
             if (radio != null) {
-                Favoritos.agregarACarpeta(prefs, radio.tag.toString(), titulo)
+                guardarDatosFavorito()
+                Favoritos.agregarACarpeta(prefs, radio.tag.toString(), claveFavorito)
                 Toast.makeText(this, "Agregado a ${radio.tag}", Toast.LENGTH_SHORT).show()
                 dialogo.dismiss()
             }
@@ -624,7 +648,7 @@ class DetalleActivity : Activity() {
 
     private fun actualizarFav() {
         if (!::botonLista.isInitialized) return
-        val fav = Favoritos.esFavorito(prefs, titulo)
+        val fav = Favoritos.esFavorito(prefs, claveFavorito, titulo)
         botonLista.text = if (fav) "★ En favoritos" else "☆ Favoritos"
         botonLista.setTextColor(if (fav) Ui.ROSA else Color.WHITE)
     }
