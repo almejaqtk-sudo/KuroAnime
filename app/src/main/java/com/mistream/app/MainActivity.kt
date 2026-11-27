@@ -351,6 +351,7 @@ class MainActivity : Activity() {
             return
         }
         pestana = i
+        if (i == 2 && carpetaFavoritos == null) carpetaFavoritos = Favoritos.nombresCarpetas(prefs).firstOrNull()
         actualizar()
     }
 
@@ -459,9 +460,32 @@ class MainActivity : Activity() {
                 }
             }
             else -> {
-                val enCarpeta = carpetaFavoritos?.let { Favoritos.titulosCarpeta(prefs, it) }
-                visibles = todos.filter { favs.contains(it.titulo) && (enCarpeta == null || it.titulo in enCarpeta) }
-                titulo.text = carpetaFavoritos?.let { "Favoritos · $it" } ?: "Favoritos"
+                val carpetas = Favoritos.nombresCarpetas(prefs)
+                if (carpetaFavoritos == null || carpetaFavoritos !in carpetas) {
+                    carpetaFavoritos = carpetas.firstOrNull()
+                }
+                val claves = carpetaFavoritos?.let { Favoritos.titulosCarpeta(prefs, it) }.orEmpty()
+                    .filter { favs.contains(it) }
+                val guardados = claves.mapNotNull { clave ->
+                    val d = Favoritos.datos(prefs, clave)
+                    if (d != null) Item(
+                        titulo = d.optString("titulo"), episodios = ModuloParser.episodiosDeJson(d.optString("episodios", "[]")),
+                        portada = d.optString("portada"), descripcion = d.optString("descripcion"),
+                        modulo = d.optString("modulo"), id = d.optString("id"), fuente = d.optString("fuente")
+                    ) else null
+                }.toMutableList()
+                // Compatibilidad con carpetas antiguas que guardaban solo el título.
+                val legacy = claves.filter { !it.startsWith("anime:") }
+                if (legacy.isNotEmpty()) {
+                    val antiguos = todos.filter { it.titulo in legacy }
+                        .groupBy { it.modulo.lowercase() + "|" + it.titulo.trim().lowercase() }
+                    antiguos.values.forEach { grupo ->
+                        val elegido = grupo.firstOrNull { it.episodios.isNotEmpty() && it.id.isNotBlank() } ?: grupo.first()
+                        if (guardados.none { it.modulo == elegido.modulo && it.titulo.equals(elegido.titulo, true) }) guardados.add(elegido)
+                    }
+                }
+                visibles = guardados.distinctBy { it.modulo.trim().lowercase() + "|" + it.titulo.trim().lowercase() }
+                titulo.text = carpetaFavoritos?.let { "Favoritos · $it" } ?: "Crea una carpeta para guardar animes"
             }
         }
         if (todos.isEmpty()) {
@@ -972,9 +996,9 @@ class MainActivity : Activity() {
 
     private fun construirTabsCarpetas() {
         tabsCarpetas.removeAllViews()
-        val nombres = listOf("Todos") + Favoritos.nombresCarpetas(prefs)
+        val nombres = Favoritos.nombresCarpetas(prefs)
         for (nombre in nombres) {
-            val real = if (nombre == "Todos") null else nombre
+            val real = nombre
             val tab = TextView(this).apply {
                 text = nombre; textSize = 16f; setTypeface(null, Typeface.BOLD)
                 setTextColor(if (carpetaFavoritos == real) Color.rgb(170, 195, 255) else Color.WHITE)
@@ -994,10 +1018,9 @@ class MainActivity : Activity() {
 
     private fun mostrarSelectorCarpeta() {
         val carpetas = Favoritos.nombresCarpetas(prefs)
-        val opciones = listOf("Todos los favoritos") + carpetas
         AlertDialog.Builder(this).setTitle("Carpetas de favoritos")
-            .setItems(opciones.toTypedArray()) { _, which ->
-                carpetaFavoritos = if (which == 0) null else carpetas[which - 1]
+            .setItems(carpetas.toTypedArray()) { _, which ->
+                carpetaFavoritos = carpetas[which]
                 actualizar()
             }.show()
     }
@@ -1062,9 +1085,12 @@ class MainActivity : Activity() {
     }
 
     private fun abrirDetalle(item: Item) {
-        val meta = listOf(item.tipo, item.estado, item.generos.joinToString(", "))
-            .filter { it.isNotEmpty() }
-            .joinToString(" · ")
+        val clave = Favoritos.clave(item.fuente, item.id, item.modulo, item.titulo, item.portada)
+        val guardado = Favoritos.datos(prefs, clave)
+        val meta = guardado?.optString("meta")?.takeIf { !it.isNullOrBlank() }
+            ?: listOf(item.tipo, item.estado, item.generos.joinToString(", "))
+                .filter { it.isNotEmpty() }
+                .joinToString(" · ")
         val intent = Intent(this, DetalleActivity::class.java)
         intent.putExtra("item", item.titulo)
         intent.putExtra("portada", item.portada)
@@ -1074,6 +1100,7 @@ class MainActivity : Activity() {
         // Se manda el enlace y el módulo directamente: así el anime abre aunque venga de un filtro o de la búsqueda
         intent.putExtra("id", item.id)
         intent.putExtra("fuente", item.fuente)
+        intent.putExtra("modulo", item.modulo)
         startActivity(intent)
     }
 
@@ -1115,7 +1142,8 @@ class MainActivity : Activity() {
             val etiqueta = if (item.ultimo.isNotEmpty()) item.ultimo
             else (item.episodios.lastOrNull()?.titulo ?: "")
             val ep = TextView(this@MainActivity)
-            ep.text = etiqueta
+            ep.text = if (pestana == 2) "" else etiqueta
+            ep.visibility = if (pestana == 2 || etiqueta.isEmpty()) View.GONE else View.VISIBLE
             ep.setTextColor(Ui.ROSA)
             ep.textSize = 14f
             ep.setTypeface(null, Typeface.BOLD)
