@@ -94,13 +94,17 @@ object Repositorio {
      */
     fun buscarEnModulo(
         fuenteActual: String,
-        consulta: String
+        consulta: String,
+        alternativas: List<String> = emptyList()
     ): Item? {
         val fuente = fuenteActual.trim()
-        val objetivo = normalizarTitulo(consulta)
-        if (fuente.isBlank() || objetivo.isBlank()) return null
+        val consultas = (listOf(consulta) + alternativas).map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinctBy { normalizarTitulo(it) }
+        if (fuente.isBlank() || consultas.isEmpty()) return null
 
-        buscarItemEnFuente(consulta, fuente = fuente)?.let { return it }
+        // Primero se revisan los elementos que ya están cargados, pero solo de esta fuente.
+        for (q in consultas) buscarItemEnFuente(q, fuente = fuente)?.let { return it }
 
         return try {
             val texto = if (fuente.startsWith("http", true)) {
@@ -123,20 +127,34 @@ object Repositorio {
                 // Un índice contiene varios módulos: no se expande para evitar una búsqueda global.
                 if (raiz.has("modulos")) return null
                 if (raiz.has("items")) {
-                    ModuloParser.parse(limpio, fuente).items.filter {
-                        coincideTitulo(it.titulo, consulta)
-                    }
+                    val catalogo = ModuloParser.parse(limpio, fuente).items
+                    catalogo.filter { item -> consultas.any { coincideTitulo(item.titulo, it) } }
                 } else emptyList()
             } else {
-                Motores.buscar(limpio, consulta).map { item ->
-                    if (item.fuente.isBlank()) item.copy(fuente = fuente) else item
+                // Cada consulta se ejecuta contra el mismo módulo; nunca se recorren otros módulos.
+                val salida = mutableListOf<Item>()
+                for (q in consultas) {
+                    val resultados = Motores.buscar(limpio, q).map { item ->
+                        if (item.fuente.isBlank()) item.copy(fuente = fuente) else item
+                    }
+                    salida.addAll(resultados)
+                    val exacto = salida.firstOrNull { item ->
+                        consultas.any { normalizarTitulo(item.titulo) == normalizarTitulo(it) }
+                    }
+                    if (exacto != null) break
                 }
+                salida
             }
 
-            val exacto = encontrados.firstOrNull { normalizarTitulo(it.titulo) == objetivo }
-            val resultado = exacto ?: encontrados.firstOrNull {
-                val t = normalizarTitulo(it.titulo)
-                t.length >= 4 && (t.contains(objetivo) || objetivo.contains(t))
+            val exacto = encontrados.firstOrNull { item ->
+                consultas.any { normalizarTitulo(item.titulo) == normalizarTitulo(it) }
+            }
+            val resultado = exacto ?: encontrados.firstOrNull { item ->
+                val t = normalizarTitulo(item.titulo)
+                t.length >= 4 && consultas.any { q ->
+                    val n = normalizarTitulo(q)
+                    n.length >= 4 && (t.contains(n) || n.contains(t))
+                }
             }
             if (resultado != null) agregarARegistro(listOf(resultado))
             resultado
@@ -463,7 +481,7 @@ object Repositorio {
                     o.put("id", item.id)
                     o.put("generos", JSONArray(item.generos))
                     val rels = JSONArray()
-                    for (rel in item.relacionados) rels.put(JSONObject().put("titulo", rel.titulo).put("relacion", rel.relacion).put("portada", rel.portada).put("id", rel.id).put("fuente", rel.fuente))
+                    for (rel in item.relacionados) rels.put(JSONObject().put("titulo", rel.titulo).put("relacion", rel.relacion).put("portada", rel.portada).put("id", rel.id).put("fuente", rel.fuente).put("alternativas", JSONArray(rel.alternativas)))
                     o.put("relacionados", rels)
                     o.put("ep", JSONArray(ModuloParser.episodiosAJson(item.episodios)))
                     lista.put(o)
@@ -500,7 +518,7 @@ object Repositorio {
                     val ra = o.optJSONArray("relacionados")
                     if (ra != null) for (r in 0 until ra.length()) {
                         val ro = ra.optJSONObject(r) ?: continue
-                        rels.add(Relacionado(ro.optString("titulo"), ro.optString("relacion"), ro.optString("portada"), ro.optString("id"), ro.optString("fuente")))
+                        rels.add(Relacionado(ro.optString("titulo"), ro.optString("relacion"), ro.optString("portada"), ro.optString("id"), ro.optString("fuente"), (ro.optJSONArray("alternativas")?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() } } ?: emptyList())))
                     }
                     lista.add(
                         Item(

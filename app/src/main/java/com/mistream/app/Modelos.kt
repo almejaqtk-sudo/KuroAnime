@@ -21,7 +21,15 @@ data class ServerLink(
 
 data class Episodio(val titulo: String, val servidores: List<ServerLink>)
 
-data class Relacionado(val titulo: String, val relacion: String = "", val portada: String = "", val id: String = "", val fuente: String = "")
+data class Relacionado(
+    val titulo: String,
+    val relacion: String = "",
+    val portada: String = "",
+    val id: String = "",
+    val fuente: String = "",
+    // Otros nombres oficiales/alternativos devueltos por AniList para localizarlo en el catálogo del módulo.
+    val alternativas: List<String> = emptyList()
+)
 
 data class Item(
     val titulo: String,
@@ -140,7 +148,8 @@ object ModuloParser {
                 ro.optString("relacion", ro.optString("tipo", "")),
                 ro.optString("portada", ""),
                 ro.optString("id", ""),
-                ro.optString("fuente", "")
+                ro.optString("fuente", ""),
+                (ro.optJSONArray("alternativas")?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() } } ?: emptyList())
             ))
         }
         return Item(

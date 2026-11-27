@@ -443,7 +443,11 @@ class DetalleActivity : Activity() {
 
         Toast.makeText(this, "Buscando ${rel.titulo} en este módulo…", Toast.LENGTH_SHORT).show()
         Thread {
-            val encontrado = Repositorio.buscarEnModulo(fuenteModulo, rel.titulo)
+            val encontrado = Repositorio.buscarEnModulo(
+                fuenteModulo,
+                rel.titulo,
+                rel.alternativas
+            )
             runOnUiThread {
                 if (encontrado != null && !isFinishing && !isDestroyed) {
                     abrirDetalleRelacionado(encontrado)
@@ -544,10 +548,19 @@ class DetalleActivity : Activity() {
                 val node = edge.optJSONObject("node") ?: continue
                 if (node.optString("type") != "ANIME" || node.optInt("id", -1) == mediaId) continue
                 val titles = node.optJSONObject("title")
-                val title = titles?.optString("english").orEmpty()
-                    .ifBlank { titles?.optString("romaji").orEmpty() }
-                    .ifBlank { titles?.optString("native").orEmpty() }
+                val romaji = titles?.optString("romaji").orEmpty()
+                val english = titles?.optString("english").orEmpty()
+                val native = titles?.optString("native").orEmpty()
+                val title = english.ifBlank { romaji }.ifBlank { native }
                 if (title.isBlank()) continue
+                val alternativas = mutableListOf<String>()
+                listOf(romaji, english, native).filter { it.isNotBlank() && !it.equals(title, true) }
+                    .forEach { alternativas.add(it) }
+                val synonyms = node.optJSONArray("synonyms")
+                if (synonyms != null) for (j in 0 until synonyms.length()) {
+                    val alias = synonyms.optString(j).trim()
+                    if (alias.isNotBlank() && !alias.equals(title, true)) alternativas.add(alias)
+                }
                 val relation = etiquetas[edge.optString("relationType")] ?: "Relacionado"
                 val format = node.optString("format")
                 val label = when (format) {
@@ -558,7 +571,7 @@ class DetalleActivity : Activity() {
                     else -> relation
                 }
                 val cover = node.optJSONObject("coverImage")?.optString("medium").orEmpty()
-                salida.add(Relacionado(title, label, cover, "", ""))
+                salida.add(Relacionado(title, label, cover, "", "", alternativas.distinctBy { it.trim().lowercase() }))
             }
             return salida
         } finally {
