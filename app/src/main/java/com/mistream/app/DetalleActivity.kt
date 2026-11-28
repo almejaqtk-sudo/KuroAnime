@@ -64,6 +64,8 @@ class DetalleActivity : Activity() {
     private var descendente = true
     private var bloqueRelacionados: LinearLayout? = null
     private var consultandoRelacionados = false
+    // Si el módulo trae sus propios relacionados (con enlace), tienen prioridad sobre AniList
+    private var relacionadosDelModulo: List<Relacionado> = emptyList()
 
     private val colorFila = Color.parseColor("#2B2840")
     private val colorFilaVisto = Color.parseColor("#1D1A2B")
@@ -429,6 +431,13 @@ class DetalleActivity : Activity() {
     }
 
     private fun abrirRelacionado(rel: Relacionado) {
+        // Relacionado que viene del propio módulo (con su enlace): se abre directo
+        if (rel.id.isNotBlank() && rel.fuente.isNotBlank()) {
+            abrirDetalleRelacionado(
+                Item(titulo = rel.titulo, episodios = emptyList(), portada = rel.portada, id = rel.id, fuente = rel.fuente)
+            )
+            return
+        }
         val fuenteObjetivo = rel.fuente.ifBlank { fuenteItem }
         val titulos = (listOf(rel.titulo) + rel.titulosAlternativos).filter { it.isNotBlank() }
             .distinctBy { it.trim().lowercase() }
@@ -484,6 +493,7 @@ class DetalleActivity : Activity() {
                 runOnUiThread {
                     consultandoRelacionados = false
                     if (isFinishing || isDestroyed) return@runOnUiThread
+                    if (relacionadosDelModulo.isNotEmpty()) return@runOnUiThread
                     val existentes = Repositorio.buscarItem(titulo, portada)?.relacionados.orEmpty()
                     val combinados = (existentes + relaciones).distinctBy { it.titulo.trim().lowercase() }
                     if (combinados.isNotEmpty()) bloqueRelacionados?.let {
@@ -550,11 +560,11 @@ class DetalleActivity : Activity() {
                 val node = edge.optJSONObject("node") ?: continue
                 if (node.optString("type") != "ANIME" || node.optInt("id", -1) == mediaId) continue
                 val titles = node.optJSONObject("title")
-                val alternativos = listOf(
-                    titles?.optString("english").orEmpty(),
-                    titles?.optString("romaji").orEmpty(),
-                    titles?.optString("native").orEmpty()
-                ).map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
+                // optString devuelve "null" cuando AniList no tiene ese título (pasa mucho con donghuas)
+                fun tituloDe(k: String): String =
+                    if (titles == null || titles.isNull(k)) "" else titles.optString(k, "")
+                val alternativos = listOf(tituloDe("english"), tituloDe("romaji"), tituloDe("native"))
+                    .map { it.trim() }.filter { it.isNotBlank() && !it.equals("null", true) }.distinctBy { it.lowercase() }
                 val title = alternativos.firstOrNull().orEmpty()
                 if (title.isBlank()) continue
                 val relation = etiquetas[edge.optString("relationType")] ?: "Relacionado"
@@ -713,7 +723,12 @@ class DetalleActivity : Activity() {
             try {
                 val eps = Motores.episodios(fuente, id)
                 val extra = MotorHub.metaDe(fuente, id)
+                val relsModulo = MotorHub.relacionadosDe(fuente, id)
                 runOnUiThread {
+                    if (relsModulo.isNotEmpty()) {
+                        relacionadosDelModulo = relsModulo
+                        bloqueRelacionados?.let { mostrarFilasRelacionadas(it, relsModulo) }
+                    }
                     episodios = eps
                     episodiosJson = ModuloParser.episodiosAJson(eps)
                     tvEps.text = if (eps.isEmpty()) "Sin episodios" else "Episodios"

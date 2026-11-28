@@ -62,6 +62,8 @@ object ImageLoader {
             )
             con.setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
             con.setRequestProperty("Referer", referer)
+            // Sitios con Cloudflare (AnimeOnline Ninja): la portada necesita la cookie cf_clearance
+            Cloudflare.cookies(url)?.takeIf { it.isNotEmpty() }?.let { con.setRequestProperty("Cookie", it) }
             val codigo = con.responseCode
             if (codigo !in 200..299) return null
             val tipo = con.contentType?.lowercase().orEmpty()

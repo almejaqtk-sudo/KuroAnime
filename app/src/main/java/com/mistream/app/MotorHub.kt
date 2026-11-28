@@ -289,6 +289,15 @@ object MotorHub {
         return detalles[claveDe(codigo) + "|" + id]
     }
 
+    // Relacionados que devolvió details() (related: [{ title, url, cover, relation }]).
+    // Traen el enlace del propio módulo, así que se abren directo sin buscar.
+    private val relacionados = ConcurrentHashMap<String, List<Relacionado>>()
+
+    fun relacionadosDe(codigo: String, id: String): List<Relacionado> {
+        if (!esFormatoHub(codigo)) return emptyList()
+        return relacionados[claveDe(codigo) + "|" + id].orEmpty()
+    }
+
     // Se llama al abrir un título: details(url). Cada episodio queda como un marcador "hub"
     // y sus videos se piden al reproducirlo (resolverVideos).
     fun episodios(codigo: String, detalleUrl: String): List<Episodio> {
@@ -298,6 +307,22 @@ object MotorHub {
         val gtxt = if (gs == null) "" else (0 until gs.length()).map { gs.optString(it) }
             .filter { it.isNotEmpty() }.joinToString(", ")
         detalles[clave + "|" + detalleUrl] = Pair(d.optString("description", ""), gtxt)
+        val ra = d.optJSONArray("related") ?: d.optJSONArray("relacionados")
+        val rels = mutableListOf<Relacionado>()
+        if (ra != null) for (i in 0 until ra.length()) {
+            val r = ra.optJSONObject(i) ?: continue
+            val t = r.optString("title", "").ifEmpty { r.optString("titulo", "") }
+            val u = r.optString("url", "").ifEmpty { r.optString("id", "") }
+            if (t.isEmpty() || u.isEmpty() || t == "null" || u == detalleUrl) continue
+            rels.add(Relacionado(
+                t,
+                r.optString("relation", "").ifEmpty { r.optString("relacion", "") },
+                r.optString("cover", "").ifEmpty { r.optString("portada", "") },
+                u,
+                codigo
+            ))
+        }
+        relacionados[clave + "|" + detalleUrl] = rels
         val arr = d.optJSONArray("episodes") ?: JSONArray()
         val lista = mutableListOf<Episodio>()
         for (i in 0 until arr.length()) {
