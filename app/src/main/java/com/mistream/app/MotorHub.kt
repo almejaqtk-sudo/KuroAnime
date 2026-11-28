@@ -440,28 +440,18 @@ internal class PuenteHub {
                     )
                     return@execute
                 }
-                val con = URL(url).openConnection() as HttpURLConnection
-                con.connectTimeout = 20000
-                con.readTimeout = 30000
-                con.instanceFollowRedirects = true
-                con.setRequestProperty("User-Agent", MotorHub.USER_AGENT)
-                val metodo = o.optString("method", "GET")
-                con.requestMethod = metodo
-                val h = o.optJSONObject("headers")
-                if (h != null) for (k in h.keys()) con.setRequestProperty(k, h.optString(k))
-                val cuerpo = if (o.isNull("body")) null else o.getString("body")
-                if (cuerpo != null && metodo != "GET" && metodo != "HEAD") {
-                    con.doOutput = true
-                    con.outputStream.use { it.write(cuerpo.toByteArray()) }
+                var r = pedir(url, o)
+                // Desafío de Cloudflare: se resuelve en un WebView y se repite la petición con su cookie
+                if (Cloudflare.esDesafio(r.codigo, r.texto, r.campos) &&
+                    Cloudflare.resolver(url, r.cookieUsada)) {
+                    r = pedir(url, o)
                 }
-                val codigo = con.responseCode
-                val flujo = if (codigo in 200..399) con.inputStream else con.errorStream
-                val texto = flujo?.bufferedReader()?.use { it.readText() } ?: ""
+                val codigo = r.codigo
+                val texto = r.texto
                 val hs = JSONObject()
-                for ((k, v) in con.headerFields) {
+                for ((k, v) in r.campos) {
                     if (k != null && v.isNotEmpty()) hs.put(k, v.last())
                 }
-                con.disconnect()
                 if (claveCache != null && codigo in 200..299 && texto.length < 1500000) {
                     if (MotorHub.cacheHttp.size > 60) MotorHub.cacheHttp.clear()
                     MotorHub.cacheHttp[claveCache] =
@@ -476,6 +466,48 @@ internal class PuenteHub {
                     "__kuroHttpDone(" + id + ",0," + JSONObject.quote(e.message ?: e.toString()) + ")"
                 )
             }
+        }
+    }
+
+    private class Respuesta(
+        val codigo: Int,
+        val texto: String,
+        val campos: Map<String?, List<String>>,
+        val cookieUsada: String?
+    )
+
+    // Una petición HTTP. Envía las cookies guardadas del sitio (por ejemplo cf_clearance) y guarda las nuevas.
+    private fun pedir(url: String, o: JSONObject): Respuesta {
+        val con = URL(url).openConnection() as HttpURLConnection
+        try {
+            con.connectTimeout = 20000
+            con.readTimeout = 30000
+            con.instanceFollowRedirects = true
+            con.setRequestProperty("User-Agent", MotorHub.USER_AGENT)
+            val metodo = o.optString("method", "GET")
+            con.requestMethod = metodo
+            val h = o.optJSONObject("headers")
+            var tieneCookie = false
+            if (h != null) for (k in h.keys()) {
+                con.setRequestProperty(k, h.optString(k))
+                if (k.equals("Cookie", true)) tieneCookie = true
+            }
+            val guardadas = Cloudflare.cookies(url)
+            if (!tieneCookie && !guardadas.isNullOrEmpty()) con.setRequestProperty("Cookie", guardadas)
+            val cuerpo = if (o.isNull("body")) null else o.getString("body")
+            if (cuerpo != null && metodo != "GET" && metodo != "HEAD") {
+                con.doOutput = true
+                con.outputStream.use { it.write(cuerpo.toByteArray()) }
+            }
+            val codigo = con.responseCode
+            val flujo = if (codigo in 200..399) con.inputStream else con.errorStream
+            val texto = flujo?.bufferedReader()?.use { it.readText() } ?: ""
+            val campos = con.headerFields ?: emptyMap()
+            val setCookie = campos.entries.firstOrNull { it.key?.equals("Set-Cookie", true) == true }?.value
+            Cloudflare.guardarCookies(con.url.toString(), setCookie)
+            return Respuesta(codigo, texto, campos, guardadas)
+        } finally {
+            con.disconnect()
         }
     }
 
