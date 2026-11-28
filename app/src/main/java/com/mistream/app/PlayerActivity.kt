@@ -95,6 +95,13 @@ class PlayerActivity : Activity() {
     private var indiceWeb = 0
     private var fallosWeb = 0
     private var escalaWebSoportada = false
+    // Servidor web: primero se abre la página del reproductor directamente (con Referer); si falla,
+    // se prueba dentro de un iframe y, si también falla, se pasa al siguiente servidor.
+    private var webEnIframe = false
+    private var hostWeb = ""
+    // Primer video directo (.m3u8 / .mp4) que pidió la página web; se puede mandar al reproductor nativo
+    @Volatile private var directoDetectado: ServerLink? = null
+    private lateinit var bNativo: TextView
     private var vistaCompleta: View? = null
     private var callbackCompleta: WebChromeClient.CustomViewCallback? = null
 
@@ -169,7 +176,9 @@ class PlayerActivity : Activity() {
         bServidores = pill("Servidor") {
             if (listaServidores.isNotEmpty()) mostrarSelector()
         }
-        for (b in listOf(bAnterior, bSiguiente, bEscala, bEpisodios, bServidores)) {
+        bNativo = pill("▶ Nativo") { reproducirDetectado() }
+        bNativo.visibility = View.GONE
+        for (b in listOf(bAnterior, bSiguiente, bEscala, bEpisodios, bServidores, bNativo)) {
             val lpb = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -320,6 +329,7 @@ class PlayerActivity : Activity() {
         bAnterior.visibility = if (indiceEp > 0) View.VISIBLE else View.GONE
         bSiguiente.visibility = if (haySiguiente()) View.VISIBLE else View.GONE
         bServidores.visibility = if (listaServidores.size > 1) View.VISIBLE else View.GONE
+        bNativo.visibility = if (modoWeb && directoDetectado != null) View.VISIBLE else View.GONE
         bEscala.text = "Escala: " + nombresEscala[idxEscala]
     }
 
@@ -589,6 +599,10 @@ class PlayerActivity : Activity() {
         s.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         s.javaScriptCanOpenWindowsAutomatically = false
         s.setSupportMultipleWindows(false)
+        // User-Agent de Chrome normal: muchos reproductores rechazan el "; wv" de los WebView
+        s.userAgentString = s.userAgentString
+            .replace("; wv", "")
+            .replace(Regex("Version/\\d+(\\.\\d+)?\\s"), "")
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
 
         // Para ajustar solo el video (sin tocar la línea de tiempo de la página)
@@ -608,9 +622,29 @@ class PlayerActivity : Activity() {
         }
 
         w.webViewClient = object : WebViewClient() {
+            // Bloquea que la página nos saque a otros sitios (anuncios / redirecciones), pero deja pasar
+            // las redirecciones y los cambios dentro del mismo sitio del reproductor.
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                if (!request.isForMainFrame) return false
                 val host = request.url.host ?: return true
-                return request.isForMainFrame && host != "localhost"
+                if (host == "localhost" || request.isRedirect) return false
+                return !mismoSitio(host, hostWeb)
+            }
+
+            // Se llama desde otro hilo: aquí solo se busca el video directo que pide la página
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                detectarDirecto(request)
+                return null
+            }
+
+            override fun onPageFinished(view: WebView, url: String?) {
+                // En modo directo no hay página propia que envíe la escala: se manda aquí
+                if (!webEnIframe && url != null && url != "about:blank") {
+                    view.evaluateJavascript(
+                        "window.postMessage({kuroEscala:'" + modoCss(idxEscala) + "'},'*');",
+                        null
+                    )
+                }
             }
 
             override fun onReceivedHttpError(
@@ -618,9 +652,7 @@ class PlayerActivity : Activity() {
                 request: WebResourceRequest,
                 errorResponse: WebResourceResponse
             ) {
-                if (request.url.toString() == urlsWeb.getOrNull(indiceWeb)?.url &&
-                    errorResponse.statusCode >= 400
-                ) falloWeb()
+                if (esPaginaDelServidor(request) && errorResponse.statusCode >= 400) falloWeb()
             }
 
             override fun onReceivedError(
@@ -628,7 +660,7 @@ class PlayerActivity : Activity() {
                 request: WebResourceRequest,
                 error: WebResourceError
             ) {
-                if (request.url.toString() == urlsWeb.getOrNull(indiceWeb)?.url) falloWeb()
+                if (esPaginaDelServidor(request)) falloWeb()
             }
         }
         w.webChromeClient = object : WebChromeClient() {
@@ -673,6 +705,7 @@ class PlayerActivity : Activity() {
         urlsWeb = lista
         indiceWeb = 0
         fallosWeb = 0
+        webEnIframe = false
         reproduciendo = true
         modoWeb = true
         vistaExo.visibility = View.GONE
@@ -683,15 +716,27 @@ class PlayerActivity : Activity() {
 
     private fun cargarWeb() {
         val srv = urlsWeb[indiceWeb]
+        directoDetectado = null
+        hostWeb = Uri.parse(srv.url).host ?: ""
+        actualizarBarra()
+
+        if (!webEnIframe) {
+            // Modo directo: la página del reproductor se abre tal cual, con el Referer que mandó el módulo
+            val cab = HashMap<String, String>()
+            val ref = srv.headers["Referer"] ?: srv.headers["referer"] ?: ""
+            if (ref.isNotEmpty()) cab["Referer"] = ref
+            web?.loadUrl(srv.url, cab)
+            return
+        }
+
+        // Respaldo: dentro de un iframe (sin sandbox, porque algunos reproductores lo detectan y se niegan)
         val seguro = srv.url.replace("&", "&amp;").replace("\"", "&quot;")
-        // Igual que AnimeHub: el reproductor va en un iframe dentro de una página propia
         val html = "<!DOCTYPE html><html><head>" +
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
             "<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}" +
             "iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0}</style>" +
             "</head><body><iframe id=\"f\" " +
             "src=\"" + seguro + "\" " +
-            "sandbox=\"allow-scripts allow-same-origin allow-forms allow-presentation\" " +
             "allow=\"autoplay; fullscreen; encrypted-media; picture-in-picture\" " +
             "allowfullscreen></iframe>" +
             "<script>window.postMessage({kuroEscala:'" + modoCss(idxEscala) + "'},'*');</script>" +
@@ -699,7 +744,25 @@ class PlayerActivity : Activity() {
         web?.loadDataWithBaseURL("https://localhost/", html, "text/html", "utf-8", null)
     }
 
+    // ¿Esta petición es la página del servidor (y no un recurso suelto)?
+    private fun esPaginaDelServidor(request: WebResourceRequest): Boolean =
+        if (webEnIframe) request.url.toString() == urlsWeb.getOrNull(indiceWeb)?.url
+        else request.isForMainFrame
+
+    private fun mismoSitio(a: String, b: String): Boolean {
+        if (b.isEmpty()) return false
+        fun base(h: String) = h.lowercase().split('.').takeLast(2).joinToString(".")
+        return base(a) == base(b)
+    }
+
     private fun falloWeb() {
+        // Primer fallo del servidor: se reintenta dentro de un iframe antes de descartarlo
+        if (!webEnIframe) {
+            webEnIframe = true
+            cargarWeb()
+            return
+        }
+        webEnIframe = false
         fallosWeb++
         if (fallosWeb >= urlsWeb.size) {
             Toast.makeText(
@@ -711,6 +774,43 @@ class PlayerActivity : Activity() {
         }
         indiceWeb = (indiceWeb + 1) % urlsWeb.size
         cargarWeb()
+    }
+
+    // Se ejecuta en un hilo de red del WebView. Guarda el primer .m3u8 / .mp4 real que pide la página.
+    private fun detectarDirecto(request: WebResourceRequest) {
+        if (!modoWeb || directoDetectado != null) return
+        val u = request.url.toString()
+        val limpio = u.substringBefore('?').substringBefore('#').lowercase()
+        val esHls = limpio.endsWith(".m3u8")
+        val esMp4 = limpio.endsWith(".mp4") || limpio.endsWith(".webm")
+        if (!esHls && !esMp4) return
+        if (Regex("(thumb|poster|preview|sprite|sample|trailer|promo|banner|logo|favicon)").containsMatchIn(limpio)) return
+
+        val cab = HashMap<String, String>()
+        val h = request.requestHeaders
+        h["Referer"]?.let { cab["Referer"] = it }
+        h["Origin"]?.let { cab["Origin"] = it }
+        h["User-Agent"]?.let { cab["User-Agent"] = it }
+        if (!cab.containsKey("Referer")) {
+            val emb = urlsWeb.getOrNull(indiceWeb)?.url
+            val p = if (emb != null) Uri.parse(emb) else null
+            if (p?.scheme != null && p.host != null) cab["Referer"] = p.scheme + "://" + p.host + "/"
+        }
+        val nombre = urlsWeb.getOrNull(indiceWeb)?.nombre ?: "Servidor"
+        directoDetectado = ServerLink(nombre + " (nativo)", u, if (esHls) "hls" else "mp4", cab)
+        runOnUiThread {
+            actualizarBarra()
+            mostrarBarraWeb()
+            Toast.makeText(this, "Video detectado: toca \"Nativo\" para usar el reproductor de la app", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun reproducirDetectado() {
+        val d = directoDetectado ?: return
+        servidores = listOf(d)
+        indiceServ = 0
+        reproduciendo = true
+        reproducir(d)
     }
 
     private fun ocultarWeb() {
